@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="NEXO X4 icon">
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d223b"/>
+      <stop offset="1" stop-color="#071325"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="44%" r="58%">
+      <stop offset="0" stop-color="#174d72" stop-opacity=".46"/>
+      <stop offset="1" stop-color="#174d72" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#field)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
+  <g transform="translate(256 208) scale(170)" fill="none" stroke-width=".17" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M-.92 0 L-.60 -.50 L-.04 -.50 L.28 0 L-.04 .50 L-.60 .50 Z" stroke="#3898ff"/>
+    <path d="M.92 0 L.60 -.50 L.04 -.50 L-.28 0 L.04 .50 L.60 .50 Z" stroke="#59e282"/>
+  </g>
+  <text x="256" y="427" text-anchor="middle" fill="#f5faff" font-family="Inter, Arial, sans-serif" font-weight="800" font-size="58" letter-spacing="3">NEXO X4</text>
+</svg>

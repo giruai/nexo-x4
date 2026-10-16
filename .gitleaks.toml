@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "A C function declaration has no credential value (generic-api-key false positive)."
+regexTarget = "line"
+regexes = ['''^\s*int x4_auth_set_grace_inbox\(X4Auth \*auth, X4NackGraceInbox \*inbox\);\s*$''']

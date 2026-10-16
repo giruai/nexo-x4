@@ -1,0 +1,12 @@
+* text=auto eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+*.c text eol=lf
+*.md text eol=lf
+*.png binary
+
+# Preserve exact upstream license and vendored source whitespace.
+docs/licenses/** -whitespace
+src/ui/psbox/vendor/** -whitespace
+src/ui/psbox_backend/extern/** -whitespace
+src/video/videodec2_abi.h -whitespace
