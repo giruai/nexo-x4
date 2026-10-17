@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
+#include "text_input.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -66,3 +67,7 @@ int x4_rtc_close(X4Rtc *);
 #ifdef __cplusplus
 }
 #endif
+
+/* Configure only before SDP/channels open; worker pumps replies after startup. */
+void x4_rtc_set_text_input(X4Rtc *rtc, X4TextInput *input);
+void x4_rtc_pump_text(X4Rtc *rtc);

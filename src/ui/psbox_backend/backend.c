@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-#include "metadata.h"
+#include "backend.h"
 #include "curated.h"
 #include <orbis/libkernel.h>
 #include <pthread.h>
@@ -16,6 +16,8 @@ struct X4PsboxBackend {
     _Atomic int cancel;
     int stopping;
     uint64_t signature, generation;
+    uint64_t language_revision;
+    int language;
     X4CatalogSnapshot *pending, *active; /* active belongs to worker */
     size_t next;
     char detail[32];
@@ -108,6 +110,7 @@ static void *metadata_worker(void *opaque)
         }
         X4CatalogSnapshot *catalog = b->active;
         uint64_t generation = b->generation;
+        int language = b->language;
         int sigl = b->sigl_next < X4_SIGL_COUNT ? (int)b->sigl_next : -1;
         size_t start = b->next;
         int detailed = sigl < 0 && b->detail[0] != 0;
@@ -136,7 +139,13 @@ static void *metadata_worker(void *opaque)
         }
         size_t next = start, count = 0;
         int status = 0;
-        int rc;
+        int rc = x4_http_set_public_language(http, language);
+        if (rc) {
+            x4_http_close(http);
+            http = NULL;
+            sceKernelUsleep(1000000);
+            continue;
+        }
         if (sigl >= 0) {
             size_t length = 0;
             rc = x4_http_gamepass_sigl(http, (enum X4GamepassSigl)sigl, sigl_body,
@@ -206,6 +215,7 @@ X4PsboxBackend *x4_psbox_backend_create(void)
         pthread_mutex_destroy(&b->mutex); free(b); return NULL;
     }
     atomic_init(&b->cancel, 0);
+    b->language = 2; /* Existing Spanish public metadata until a preference is supplied. */
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) != 0) {
         pthread_cond_destroy(&b->changed); pthread_mutex_destroy(&b->mutex); free(b); return NULL;
@@ -266,6 +276,45 @@ int x4_psbox_backend_set_catalog(X4PsboxBackend *b, const X4CatalogSnapshot *cat
     pthread_cond_signal(&b->changed);
     pthread_mutex_unlock(&b->mutex);
     return 1;
+}
+
+int x4_psbox_backend_set_language(X4PsboxBackend *b, int language)
+{
+    if (!b || !x4_http_public_locale(language)) return -1;
+    pthread_mutex_lock(&b->mutex);
+    if (b->stopping) { pthread_mutex_unlock(&b->mutex); return -1; }
+    if (b->language == language) { pthread_mutex_unlock(&b->mutex); return 0; }
+    /* The worker owns active. Clone under the lock and let it finish its
+     * current cancelled request before replacing the private snapshot. */
+    const X4CatalogSnapshot *source = b->pending ? b->pending : b->active;
+    X4CatalogSnapshot *copy = NULL;
+    if (source) {
+        copy = malloc(sizeof(*copy));
+        if (!copy) { pthread_mutex_unlock(&b->mutex); return -1; }
+        memcpy(copy, source, sizeof(*copy));
+    }
+    free(b->pending);
+    b->pending = copy;
+    b->language = language;
+    ++b->language_revision;
+    ++b->generation;
+    b->batch_head = b->batch_count = 0;
+    b->row_count = b->rows_ready = 0;
+    b->sigl_next = 0;
+    b->detail[0] = 0;
+    atomic_store(&b->cancel, 1);
+    pthread_cond_signal(&b->changed);
+    pthread_mutex_unlock(&b->mutex);
+    return 1;
+}
+
+uint64_t x4_psbox_backend_language_revision(X4PsboxBackend *b)
+{
+    if (!b) return 0;
+    pthread_mutex_lock(&b->mutex);
+    uint64_t revision = b->language_revision;
+    pthread_mutex_unlock(&b->mutex);
+    return revision;
 }
 
 int x4_psbox_backend_request_detail(X4PsboxBackend *b, const char *product_id)

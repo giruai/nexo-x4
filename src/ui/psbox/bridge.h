@@ -2,6 +2,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "../game_text.h"
 #include "../../auth/xbox_catalog.h"
 #include "../../auth/device_auth.h"
 #ifdef __cplusplus
@@ -88,6 +89,9 @@ int x4_psbox_render(X4PsboxUi *ui, uint32_t *pixels, size_t pixel_count, uint64_
  * input while the menu is open or being toggled. */
 int x4_psbox_stream_profile(const X4PsboxUi *ui);
 int x4_psbox_diagnostics(const X4PsboxUi *ui);
+int x4_psbox_language(const X4PsboxUi *ui);
+int x4_psbox_settings_open(const X4PsboxUi *ui);
+void x4_psbox_show_closing(X4PsboxUi *ui);
 int x4_psbox_menu_open(const X4PsboxUi *ui);
 /* Whether menu, statistics or connection warning will read/blend live pixels. */
 int x4_psbox_needs_overlay(const X4PsboxUi *ui, int degraded);
@@ -99,6 +103,16 @@ int x4_psbox_menu_composite(X4PsboxUi *ui, uint32_t *pixels, size_t pixel_count,
 int x4_psbox_screen(const X4PsboxUi *ui);
 int x4_psbox_tab(const X4PsboxUi *ui);
 
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void x4_psbox_game_text_clear(X4PsboxUi *ui);
+int x4_psbox_game_text_composite(X4PsboxUi *ui, const X4GameText *text,
+    uint32_t *pixels, size_t pixel_count, unsigned revision, int pending);
 #ifdef __cplusplus
 }
 #endif

@@ -27,10 +27,8 @@
 /* Per-entry bound on programs x subscriptions comparisons. */
 #define X4_XBOX_PROGRAMS_MAX 16u
 #define X4_XBOX_CANCELLED 1
-/* Generic public platform profile; no console identifier is sent here. */
-#define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"Nexo X4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.1.0\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
-    "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
+/* Device identity is public and shared by the catalog/session paths. */
+#include "device_info.h"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
  * (0.6.2) followed by real RTC signaling (0.7.0). Timings in monotonic usec. */
@@ -96,6 +94,7 @@ struct X4XboxWork {
     void *passport_context;
     X4SessionSnapshot session;
     int stream_profile; /* Set before the single session run starts. */
+    X4TextInput *text_input; /* Borrowed from Auth for this joined worker. */
     uint64_t session_start;
     X4Rtc *rtc;
     X4SessionMediaCallback media_callback;
@@ -912,6 +911,9 @@ static enum X4RemoteQueueState remote_queue_state(const char *state)
 /* Optional title/region estimate. Never mutates the real session state or
  * its HTTP context. A 3 s request deadline limits interference with /state;
  * context creation/cleanup are native calls and are not covered by it. */
+void x4_xbox_work_set_text_input(X4XboxWork *w, X4TextInput *input)
+{ if (w) w->text_input = input; }
+
 static void session_queue_estimate(X4XboxWork *w, uint64_t now, uint64_t deadline)
 {
     if (w->queue_disabled || !x4_queue_refresh_due(true, now, w->next_queue_query_us) ||
@@ -2299,12 +2301,16 @@ static void session_stream(X4XboxWork *w, SessionEnd *end)
     w->next_keepalive = session_now();
     w->rtc = x4_rtc_open_profile(w->stream_profile, &rc);
     if (!w->rtc) { end_with(end, X4_SESSION_ERROR, rc ? rc : X4_AUTH_E_SESSION, 0, "no se pudo iniciar WebRTC nativo"); return; }
+    x4_rtc_set_text_input(w->rtc, w->text_input);
     x4_rtc_set_media_callback(w->rtc, w->media_callback, w->media_user);
     x4_rtc_set_diagnostic_trace(w->rtc, w->media_trace);
     x4_rtc_set_rumble_mailbox(w->rtc, w->rumble);
     x4_rtc_set_nack_grace_inbox(w->rtc, w->grace_inbox);
     rc = x4_rtc_set_gamepad_source(w->rtc, w->gamepad_source, w->gamepad_user);
-    if (rc) printf("Nexo X4: iniciar envio de control fallo 0x%08x\n", (unsigned)rc);
+    if (rc) {
+        end_with(end, X4_SESSION_ERROR, rc, 0, "no se pudo iniciar envio de controles");
+        goto done;
+    }
     if (!signal_sdp(w, deadline, end)) goto done;
     session_state(w, X4_SESSION_CONNECTING, "negociando ruta ICE con Xbox", seconds_until(deadline, session_now()));
     uint64_t next_ice = session_now(), connected_at = 0, last_keyframe = 0, disconnected_at = 0;

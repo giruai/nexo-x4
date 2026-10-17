@@ -48,6 +48,22 @@ constexpr Color kGreen = rgba(16, 124, 16);
 constexpr Color kPanel = rgba(36, 36, 36);
 constexpr Color kPlaceholder = rgba(44, 44, 44);
 
+#ifdef X4_OPENORBIS
+const char* ps4SettingsText(int item) {
+    // Keep the native-only rows localized without changing upstream strings.
+    static constexpr const char* labels[6][4] = {
+        {"Diagnostics", "1080p / 60 FPS (experimental)", "Video quality applies next session. 1080p is experimental.", "Catalog order"},
+        {"Diagnóstico", "1080p / 60 FPS (experimental)", "Qualidade do vídeo na próxima sessão. 1080p é experimental.", "Ordem do catálogo"},
+        {"Diagnóstico", "1080p / 60 FPS (experimental)", "La calidad se aplica en la próxima sesión. 1080p es experimental.", "Orden del catálogo"},
+        {"Diagnostic", "1080p / 60 FPS (expérimental)", "Qualité vidéo à la prochaine session. 1080p est expérimental.", "Ordre du catalogue"},
+        {"Diagnose", "1080p / 60 FPS (experimentell)", "Videoqualität ab der nächsten Sitzung. 1080p ist experimentell.", "Katalogreihenfolge"},
+        {"Diagnostica", "1080p / 60 FPS (sperimentale)", "Qualità video nella prossima sessione. 1080p è sperimentale.", "Ordine del catalogo"},
+    };
+    int lang = std::clamp(static_cast<int>(language()), 0, 5);
+    return labels[lang][item];
+}
+#endif
+
 enum Icon { kIconCross, kIconCircle, kIconOptions, kIconTriangle, kIconTouchpad, kIconSquare, kIconR3, kIconL2R2 };
 
 // The resolution list, lowest first: SettingsChoice::resolution value per
@@ -62,9 +78,12 @@ constexpr int kSettingsOrder[kSettingRows] = {0, 1, 9, 8, 10, 2, 11, 3, 4, 5, 6,
 #else
 constexpr int kSettingsOrder[kSettingRows] = {0, 8, 1, 9, 10, 2, 11, 3, 4, 5, 6, 12, 7};
 #endif
-// PS4 bridge currently applies language only. Hide PS5-only video, haptics,
-// updates and account-country choices until XCloud4 has matching backends.
+#ifdef X4_OPENORBIS
+// Only language, requested video profile and diagnostics have PS4 backends.
 constexpr int kPs4VisibleSettingsRows = 3;
+#else
+constexpr int kPs4VisibleSettingsRows = kSettingRows;
+#endif
 constexpr bool kSettingsGroupStart[kSettingRows] = {false, false, true, false, false, false, true,
                                                     true, false, false, false, false, true};
 int settingsPos(int row) {
@@ -549,7 +568,12 @@ void AppUi::drawLoadingBar(Canvas& c, int x, int y, int w, uint64_t nowMs) {
 void AppUi::setPrefs(const std::vector<std::string>& hidden, LibrarySort sort) {
     std::lock_guard<std::mutex> lock(mutex_);
     hidden_ = std::set<std::string>(hidden.begin(), hidden.end());
+#ifdef X4_OPENORBIS
+    // The current catalog has no platform/last-played sort keys.
+    librarySort_ = sort == LibrarySort::AZ ? LibrarySort::AZ : LibrarySort::Recent;
+#else
     librarySort_ = sort;
+#endif
     rebuild();
 }
 
@@ -747,22 +771,38 @@ const GameTile* AppUi::libraryTile(int index) const {
 void AppUi::showFilteredSearch(Tab tab, bool cheapest, int mode, const std::string& genre, int language, int openList) {
     std::lock_guard<std::mutex> lock(mutex_);
     screen_ = Screen::Home;
+#ifdef X4_OPENORBIS
+    // This platform has text search, but the metadata-backed filter chips are hidden.
+    tab_ = tab == Tab::Consoles ? Tab::GamePass : tab;
+    (void)cheapest; (void)mode; (void)genre; (void)language; (void)openList;
+#else
     tab_ = tab;
+#endif
     searching_ = true;
     searchOnKeys_ = true;
     query_.clear();
     filterFree_ = false;
     filterMouseKeyboard_ = false;
+#ifdef X4_OPENORBIS
+    filterCheapest_ = false;
+    filterConsole_ = filterMode_ = filterLanguage_ = filterPublisher_ = 0;
+    filterGenre_.clear();
+#else
     filterCheapest_ = cheapest;
     filterConsole_ = 0;
     filterMode_ = mode;
     filterGenre_ = genre;
     filterLanguage_ = language;
     filterPublisher_ = 0;
+#endif
     runSearch();
+#ifdef X4_OPENORBIS
+    keyRow_ = keyCol_ = 0;
+#else
     keyRow_ = kKeyRows + 2;  // the row of lists
     keyCol_ = std::max(0, openList);
     if (openList >= 0) pressFilter(filterRow(1)[static_cast<size_t>(openList)]);
+#endif
     dirty_ = true;
 }
 
@@ -793,6 +833,9 @@ std::string AppUi::focusDescription() const {
 
 void AppUi::showTab(Tab t) {
     std::lock_guard<std::mutex> lock(mutex_);
+#ifdef X4_OPENORBIS
+    if (t == Tab::Consoles) t = Tab::GamePass;
+#endif
     tab_ = t;
     searching_ = false;
     dirty_ = true;
@@ -1264,6 +1307,10 @@ void AppUi::setPerGameSettings(const std::map<std::string, app::GameProfile>& pe
 }
 
 void AppUi::openGameSettings() {
+#ifdef X4_OPENORBIS
+    // Per-game filters and controls do not have native PS4 backends.
+    return;
+#else
     gameSettingsOpen_ = true;
     gameSettingsRow_ = 0;
     std::string key = app::gameProfileKey(detail_.productId, detail_.titleId);
@@ -1289,6 +1336,7 @@ void AppUi::openGameSettings() {
         activeGameProfile_.gyroMode = gyroMode_;
         activeGameProfile_.gyroLevel = gyroLevel_;
     }
+#endif
 }
 
 void AppUi::closeGameSettings() {
@@ -1350,9 +1398,14 @@ bool AppUi::accentColor(Color& out) {
 }
 
 void AppUi::drawPads(Canvas& c) {
+#ifndef X4_OPENORBIS
     // Bottom left, on the line of the button hints (which are right-aligned).
     drawPadRow(c, fonts_.bold, kMargin, kH - 26 - padIconHeight(48), 48, 16, pads_, kBg,
                fonts_.hasIcons ? &fonts_.icons : nullptr);
+#else
+    // PS4 currently drives one player; four empty slots imply unsupported local multiplayer.
+    (void)c;
+#endif
 }
 
 void AppUi::setRegions(std::vector<std::string> regions, const std::string& defaultRegion) {
@@ -1378,7 +1431,7 @@ std::vector<std::string> AppUi::settingOptions(int row) const {
         for (int i = 0; i < static_cast<int>(Language::Count); ++i) out.push_back(languageName(static_cast<Language>(i)));
     } else if (row == 1) {
         #ifdef X4_OPENORBIS
-        out = {"720p / 60 FPS", "1080p / 60 FPS (experimental)"};
+        out = {"720p / 60 FPS", ps4SettingsText(1)};
 #else
         out = {tr(Str::Res720), tr(Str::Res1080), tr(Str::ResBest)};
 #endif
@@ -1613,9 +1666,14 @@ void AppUi::handleHome(const NavInput& in, UiEvent& ev) {
         return;
     }
     if (in.l1 || in.r1) {
-        // PS4 bridge: only account catalog and Your games are wired.
+#ifdef X4_OPENORBIS
+        // The native catalog exposes Game Pass and Your games only.
         int n = static_cast<int>(tab_) + 1;
         tab_ = static_cast<Tab>(n % 2);
+#else
+        int n = static_cast<int>(tab_) + (in.r1 ? 1 : 2);
+        tab_ = static_cast<Tab>(n % 3);
+#endif
         searching_ = false;
         dirty_ = true;
         return;
@@ -1793,8 +1851,12 @@ void AppUi::handleHome(const NavInput& in, UiEvent& ev) {
                 }
             }
             if (in.r3) {  // next sort order
+#ifdef X4_OPENORBIS
+                librarySort_ = librarySort_ == LibrarySort::AZ ? LibrarySort::Recent : LibrarySort::AZ;
+#else
                 librarySort_ = static_cast<LibrarySort>((static_cast<int>(librarySort_) + 1) %
                                                          static_cast<int>(LibrarySort::Count));
+#endif
                 rebuild(true);  // same place on screen, not back to the top
                 prefsEvent(ev);
             }
@@ -1810,16 +1872,19 @@ bool AppUi::anyFilter() const {
 }
 
 std::vector<AppUi::Filter> AppUi::filterRow(int row) const {
+#ifdef X4_OPENORBIS
     // PS4 catalog supplies title/name and verified entitlement. Price,
     // platform, genre, mode and language filters need fields it does not have.
     // Keep the original PSBox text search without exposing false filters.
     (void)row;
     return {};
+#else
     // Caller holds mutex_. Prices only matter in "Your games" (Game Pass
     // games aren't bought).
     if (row == 1) return {Filter::Mode, Filter::Genre, Filter::Publisher, Filter::Language};
     if (tab_ == Tab::GamePass) return {Filter::Console, Filter::MouseKeyboard};
     return {Filter::Free, Filter::Cheapest, Filter::Console, Filter::MouseKeyboard};
+#endif
 }
 
 std::vector<std::string> AppUi::poolGenres() const {
@@ -2285,9 +2350,12 @@ UiEvent AppUi::handle(const NavInput& in) {
                 dirty_ = true;
                 ev.action = settings_.loginCountry != settingsCountry_ ? Action::LoginCountry : Action::SettingsChanged;
                 ev.settings = settings_;
-            } else if (in.triangle) {
+            }
+#ifndef X4_OPENORBIS
+            else if (in.triangle) {
                 ev.action = Action::Report;  // "Report a problem"
             }
+#endif
             break;
         case Screen::Details:
             if (gameSettingsOpen_) {
@@ -2295,8 +2363,10 @@ UiEvent AppUi::handle(const NavInput& in) {
                 break;
             }
             if (in.options) {
+#ifndef X4_OPENORBIS
                 openGameSettings();
                 dirty_ = true;
+#endif
                 break;
             }
             // A free game not on the account yet may already be (got on the
@@ -2319,16 +2389,21 @@ UiEvent AppUi::handle(const NavInput& in) {
                 if (in.accept) {
                     ev.action = Action::Play;
                     ev.game = errorGame_;
-                } else if (in.back && errorGame_.homeConsole) {
+                }
+#ifndef X4_OPENORBIS
+                else if (in.back && errorGame_.homeConsole) {
                     screen_ = Screen::Home;  // back to My consoles
                     tab_ = Tab::Consoles;
                     dirty_ = true;
-                } else if (in.back) {
+                }
+#endif
+                else if (in.back) {
                     openDetails(errorGame_);
                 }
             } else if (in.accept) {
                 ev.action = Action::Retry;
             }
+#ifndef X4_OPENORBIS
             if (regionRefused_ && in.square) {
                 countryPickerOpen_ = true;
                 countryIndex_ = settingSelected(8);
@@ -2345,6 +2420,7 @@ UiEvent AppUi::handle(const NavInput& in) {
                 ev.action = Action::Report;
                 ev.reportWhat = error_;
             }
+#endif
             break;
         default: break;
     }
@@ -2641,10 +2717,16 @@ void AppUi::drawSignIn(Canvas& c, uint64_t nowMs) {
 
 void AppUi::drawTabs(Canvas& c) {
     // Centred pills in the top bar, between "L1" and "R1".
+#ifdef X4_OPENORBIS
     const char* labels[2] = {tr(Str::TabGamePass), tr(Str::YourGames)};
+    constexpr int kTabs = 2;
+#else
+    const char* labels[3] = {tr(Str::TabGamePass), tr(Str::YourGames), tr(Str::TabConsoles)};
+    constexpr int kTabs = 3;
+#endif
     constexpr int kPx = 22, kPad = 26, kGap = 12, kH = 44, kY = 50;
-    int widths[2], total = 0;
-    for (int i = 0; i < 2; ++i) {
+    int widths[kTabs], total = 0;
+    for (int i = 0; i < kTabs; ++i) {
         widths[i] = fonts_.semibold.measure(labels[i], kPx) + 2 * kPad;
         total += widths[i] + (i ? kGap : 0);
     }
@@ -2655,7 +2737,7 @@ void AppUi::drawTabs(Canvas& c) {
         fonts_.bold.draw(c, name, cx - fonts_.bold.measure(name, 16) / 2, fonts_.bold.centeredY(r.y, r.h, 16), 16, kGray);
     };
     shoulder(g_keyboardHints ? "Q" : "L1", x - 40);
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < kTabs; ++i) {
         bool on = static_cast<int>(tab_) == i;
         Rect r{x, kY, widths[i], kH};
         if (on) c.fillRect(r, kWhite, kH / 2);
@@ -2800,11 +2882,19 @@ void AppUi::drawCard(Canvas& c, const GameTile& t, int x, int y, bool focused, b
     // Bottom-right: the console it was made for; one style and width for all.
     // Left of it, how it's played: keyboard and mouse (the cloud takes them
     // in it) or the controller only.
+#ifdef X4_OPENORBIS
+    if (fonts_.hasIcons) {
+#else
     if (t.mouseKeyboard || fonts_.hasIcons) {
+#endif
         int right = x + kCard - 10 - (platformLabel(t.platform) ? 96 + 6 : 0);
         Rect k{right - 34, y + kCard - 34, 34, 24};
         c.fillRect(k, rgba(0, 0, 0, 220), 4);
+#ifdef X4_OPENORBIS
+        const char* glyph = kIconGamepad;
+#else
         const char* glyph = t.mouseKeyboard ? kIconKeyboardMouse : kIconGamepad;
+#endif
         if (fonts_.hasIcons)  // the console's own icons
             fonts_.icons.draw(c, glyph, k.x + (k.w - fonts_.icons.measure(glyph, 18)) / 2, k.y + 3, 18, kWhite);
         else
@@ -2889,13 +2979,22 @@ void AppUi::drawLibrary(Canvas& c, uint64_t nowMs) {
             drawCentered(c, fonts_.semibold, tr(Str::NoGames), 500, 30, kGray);
         }
     }
+#ifdef X4_OPENORBIS
+    if (libraryTile(0)) {
+#else
     {
+#endif
         drawLoadingBar(c, left, 112, 420, nowMs);
         // The order (the whole tab's), right-aligned under the tabs, with its button.
+#ifdef X4_OPENORBIS
+        std::string label = trf(Str::SortLabel,
+            librarySort_ == LibrarySort::AZ ? tr(Str::SortAZ) : ps4SettingsText(3));
+#else
         Str sortName = librarySort_ == LibrarySort::AZ        ? Str::SortAZ
                        : librarySort_ == LibrarySort::Console ? Str::SortConsole
                                                               : Str::SortRecent;
         std::string label = trf(Str::SortLabel, tr(sortName));
+#endif
         int w = fonts_.semibold.measure(label, 22);
         int right = left + kGridW;
         const char* sortKey = g_keyboardHints ? "R" : "R3";
@@ -2910,12 +3009,20 @@ void AppUi::drawLibrary(Canvas& c, uint64_t nowMs) {
     c.fillRect({0, kH - 80, kW, 80}, withAlpha(kBg, 245));
     const GameTile* focus = libraryTile(gridFocus_);
     bool focusHidden = focus && hidden_.count(focus->productId);
-    drawHints(c, {{kIconCross, tr(Str::Select)},
-                  {kIconSquare, tr(focusHidden ? Str::Unhide : Str::Hide)},
-                  {kIconTriangle, tr(Str::TabSearch)},
-                  {kIconR3, tr(Str::SortHint)},
-                  {kIconL2R2, tr(Str::Sections)},
-                  {kIconOptions, tr(Str::Settings)}});
+#ifdef X4_OPENORBIS
+    if (focus && !focus->productId.empty())
+#endif
+        drawHints(c, {{kIconCross, tr(Str::Select)},
+                      {kIconSquare, tr(focusHidden ? Str::Unhide : Str::Hide)},
+                      {kIconTriangle, tr(Str::TabSearch)},
+                      {kIconR3, tr(Str::SortHint)},
+                      {kIconL2R2, tr(Str::Sections)},
+                      {kIconOptions, tr(Str::Settings)}});
+#ifdef X4_OPENORBIS
+    else drawHints(c, {{kIconTriangle, tr(Str::TabSearch)},
+                       {kIconOptions, tr(Str::Settings)},
+                       {kIconTouchpad, tr(Str::HoldSignOut)}});
+#endif
     drawPads(c);
     drawToast(c, nowMs);
 }
@@ -3240,11 +3347,19 @@ void AppUi::drawHome(Canvas& c, uint64_t nowMs) {
     // Fade the rows out under the button hints.
     c.gradientV({0, kH - 190, kW, 110}, withAlpha(kBg, 0), withAlpha(kBg, 245));
     c.fillRect({0, kH - 80, kW, 80}, withAlpha(kBg, 245));
-    drawHints(c, {{kIconCross, tr(Str::Select)},
-                  {kIconSquare, tr(focus && hidden_.count(focus->productId) ? Str::Unhide : Str::Hide)},
-                  {kIconTriangle, tr(Str::TabSearch)},
-                  {kIconOptions, tr(Str::Settings)},
-                  {kIconTouchpad, tr(Str::HoldSignOut)}});
+#ifdef X4_OPENORBIS
+    if (focus && !focus->productId.empty())
+#endif
+        drawHints(c, {{kIconCross, tr(Str::Select)},
+                      {kIconSquare, tr(focus && hidden_.count(focus->productId) ? Str::Unhide : Str::Hide)},
+                      {kIconTriangle, tr(Str::TabSearch)},
+                      {kIconOptions, tr(Str::Settings)},
+                      {kIconTouchpad, tr(Str::HoldSignOut)}});
+#ifdef X4_OPENORBIS
+    else drawHints(c, {{kIconTriangle, tr(Str::TabSearch)},
+                       {kIconOptions, tr(Str::Settings)},
+                       {kIconTouchpad, tr(Str::HoldSignOut)}});
+#endif
     drawPads(c);
     drawToast(c, nowMs);
 }
@@ -3279,7 +3394,9 @@ void AppUi::drawDetails(Canvas& c, uint64_t nowMs) {
     std::string cats;
     if (const char* p = platformLabel(g->platform)) cats = p;
     for (const auto& cat : g->categories) cats += (cats.empty() ? "" : "  \xE2\x80\xA2  ") + cat;
+#ifndef X4_OPENORBIS
     if (g->mouseKeyboard) cats += std::string(cats.empty() ? "" : "  \xE2\x80\xA2  ") + tr(Str::MouseKeyboardSupport);
+#endif
     if (!cats.empty()) {
         fonts_.regular.draw(c, cats, kMargin, y, 24, kDim);
         y += 44;
@@ -3400,7 +3517,7 @@ void AppUi::drawLaunching(Canvas& c, uint64_t nowMs) {
     // A transient transport stage belongs in diagnostics, not on this screen.
     if (stage.find("HTTP") != std::string::npos || stage.find("PID") != std::string::npos ||
         stage.find("0x") != std::string::npos || stage.find("0X") != std::string::npos)
-        stage = "Preparando la sesión";
+        stage = tr(Str::GettingReady);
 #endif
     drawCentered(c, fonts_.regular, fonts_.regular.fit(stage, 26, 1260), 630, 26, kDim);
     if (!queueInfo_.empty()) {
@@ -3437,9 +3554,13 @@ void AppUi::drawError(Canvas& c) {
     if (!errorGame_.titleId.empty())
         drawHints(c, {{kIconCross, tr(Str::TryAgain)}, {kIconCircle, tr(Str::Back)}});
     else if (regionRefused_)
+#ifdef X4_OPENORBIS
+        drawHints(c, {{kIconCross, tr(Str::TryAgain)}, {kIconTouchpad, tr(Str::HoldSignOut)}});
+#else
         drawHints(c, {{kIconCross, tr(Str::TryAgain)}, {kIconSquare, tr(Str::TryOtherCountry)},
                       {kIconOptions, tr(Str::Settings)},
                       {kIconTouchpad, tr(Str::HoldSignOut)}});
+#endif
     else
         drawHints(c, {{kIconCross, tr(Str::TryAgain)},
                       {kIconTouchpad, tr(Str::HoldSignOut)}});
@@ -3455,7 +3576,9 @@ void AppUi::drawSettings(Canvas& c) {
                                         tr(Str::HighRefresh),   tr(Str::BitrateCap),    tr(Str::GameVolume),
                                         tr(Str::KeyboardKeys)};
     constexpr int kRowW = 1200, kRowH = 46, kGap = 5, kGroupGap = 16;
-    labels[9] = "Diagnostico";
+#ifdef X4_OPENORBIS
+    labels[9] = ps4SettingsText(0);
+#endif
     Rect rows[kSettingRows];  // by row id
     int y = 236;
     for (int pos = 0; pos < kPs4VisibleSettingsRows; ++pos) {
@@ -3500,10 +3623,12 @@ void AppUi::drawSettings(Canvas& c) {
         }
         y += kRowH + kGap;
     }
-    for (const auto& line : fonts_.regular.wrap("El perfil se aplica al iniciar la proxima sesion. 1080p es experimental. Diagnostico: mandos y rendimiento.", 24, kRowW, 2)) {
+#ifdef X4_OPENORBIS
+    for (const auto& line : fonts_.regular.wrap(ps4SettingsText(2), 24, kRowW, 2)) {
         fonts_.regular.draw(c, line, kMargin, y + 20, 24, kDim);
         y += 34;
     }
+#endif
 
     if (pickerOpen_) {
         drawColourPicker(c);

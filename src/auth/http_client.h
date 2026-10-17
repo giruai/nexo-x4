@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -31,10 +32,52 @@ static inline uint32_t x4_http_phase_timeout(int regional_titles)
 
 typedef struct X4Http X4Http;
 
+/* Public Game Pass text only; market and verified catalog permissions stay MX.
+ * Fixed locale choices keep caller input out of public URLs. */
+static inline const char *x4_http_public_locale(int language)
+{
+    static const char *const locales[6] = {
+        "en-US", "pt-BR", "es-MX", "fr-FR", "de-DE", "it-IT"
+    };
+    return language >= 0 && language < 6 ? locales[language] : NULL;
+}
+
+enum X4GamepassSigl {
+    X4_SIGL_RECENT, X4_SIGL_POPULAR, X4_SIGL_FREE_TO_PLAY, X4_SIGL_LEAVING,
+    X4_SIGL_COUNT
+};
+static inline int x4_http_public_products_url(int language, int detailed, char *out, size_t capacity)
+{
+    const char *locale = x4_http_public_locale(language);
+    if (!locale || !out || !capacity || (detailed != 0 && detailed != 1)) return -1;
+    int n = snprintf(out, capacity,
+        "https://catalog.gamepass.com/v3/products?market=MX&language=%s&hydration=%s",
+        locale, detailed ? "RemoteHighSapphire0" : "RemoteLowJade0");
+    return n >= 0 && (size_t)n < capacity ? 0 : -1;
+}
+static inline int x4_http_public_sigl_url(int language, enum X4GamepassSigl list,
+    char *out, size_t capacity)
+{
+    static const char *const ids[X4_SIGL_COUNT] = {
+        "06323672-b8c8-43cc-b0de-32d5a9834749",
+        "6a589fa0-d493-472b-8e20-3813699d7056",
+        "d8f4afcd-882a-49e3-86b3-f61fa0172b75",
+        "31ff2361-2772-4622-849b-f4f1abb4ad1b"
+    };
+    const char *locale = x4_http_public_locale(language);
+    if (!locale || !out || !capacity || (unsigned)list >= X4_SIGL_COUNT) return -1;
+    int n = snprintf(out, capacity,
+        "https://catalog.gamepass.com/sigls/v2?id=%s&market=MX&language=%s",
+        ids[list], locale);
+    return n >= 0 && (size_t)n < capacity ? 0 : -1;
+}
+
 /* Every call, including open and close, belongs to one worker thread. Close
  * only after that worker has finished; it never runs a global NetTerm. */
 X4Http *x4_http_open(int *error);
 void x4_http_close(X4Http *http);
+/* Worker-thread only; refused while a request is active. Default is es-MX. */
+int x4_http_set_public_language(X4Http *http, int language);
 
 /* Encoded forms are visible ASCII of at most this many bytes; a refresh token
  * of 16 KiB still fits once percent-encoded. */
@@ -94,10 +137,6 @@ int x4_http_gamepass_products(X4Http *http, int detailed, const char *json, char
 int x4_http_store_image(X4Http *http, const char *url, char *body, size_t capacity,
     size_t *length, int *status, const _Atomic int *cancel);
 /* Fixed public SIGL lists from PSBox. No caller URL, headers or credentials. */
-enum X4GamepassSigl {
-    X4_SIGL_RECENT, X4_SIGL_POPULAR, X4_SIGL_FREE_TO_PLAY, X4_SIGL_LEAVING,
-    X4_SIGL_COUNT
-};
 int x4_http_gamepass_sigl(X4Http *http, enum X4GamepassSigl list, char *body,
     size_t capacity, size_t *length, int *status, const _Atomic int *cancel);
 

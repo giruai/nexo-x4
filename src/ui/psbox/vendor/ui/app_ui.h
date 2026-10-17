@@ -77,7 +77,8 @@ struct GameRow {
 
 enum class Screen { Splash, SignIn, Home, Details, Launching, Streaming, Error, Settings, Updating };
 
-// The home screen's tabs (L1 / R1). Triangle searches the current one.
+// The home screen's tabs (L1 / R1). PS4 shows Game Pass and Library only;
+// Consoles remains available to upstream builds with a remote-console backend.
 enum class Tab { GamePass, Library, Consoles };
 
 struct NavInput {
@@ -265,6 +266,7 @@ public:
     // chosen there, before it is saved (the app makes the pad follow).
     bool circleConfirms() const;
     // The controllers in use (bottom left of the home screen).
+    // Upstream multiplayer UI uses four slots. Native PS4 does not draw that row.
     void setPads(const PadSlots& pads);
     // The colour of the game in focus (or being played), from its art, for
     // the DualSense light bar; false while there is none to show.

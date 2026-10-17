@@ -55,3 +55,20 @@ static inline int x4_stream_profile_dimensions(X4StreamProfile p,
         p.width, p.height, p.width, p.height, p.width, p.height);
     return n >= 0 && (size_t)n < capacity ? n : -1;
 }
+
+/* Explicit control-plane request used by the Xbox streaming protocol. This
+ * asks for a base resolution only; it neither grants a paid tier nor proves
+ * that the service delivered the requested dimensions. */
+static inline int x4_stream_profile_resolution_message(X4StreamProfile p,
+    char *out, size_t capacity)
+{
+    if (!out || !capacity) return -1;
+    out[0] = 0;
+    const char *alias = p.width == 1920 && p.height == 1080 ? "1080" :
+        p.width == 1280 && p.height == 720 ? "720" : NULL;
+    if (!alias) return -1;
+    int n = snprintf(out, capacity,
+        "{\"message\":\"userRequestedResolutionUpdate\",\"resolutionAlias\":\"%s\"}", alias);
+    if (n < 0 || (size_t)n >= capacity) { out[0] = 0; return -1; }
+    return n;
+}

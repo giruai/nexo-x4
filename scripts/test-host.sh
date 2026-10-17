@@ -15,6 +15,16 @@ done
 .local/tests/video_ingress
 "$host_cc" "${flags[@]}" tests/queue_estimate_test.c src/auth/queue_estimate.c src/auth/json.c -o .local/tests/queue_estimate
 .local/tests/queue_estimate
+"$host_cc" "${flags[@]}" tests/stream_profile_test.c src/auth/json.c -o .local/tests/stream_profile
+.local/tests/stream_profile
+"$host_cc" "${flags[@]}" tests/text_input_test.c src/streaming/text_input.c src/auth/json.c -o .local/tests/text_input
+.local/tests/text_input
+"$host_cc" "${flags[@]}" -Itests/host_stubs tests/game_text_test.c src/ui/game_text.c src/ui/canvas.c -o .local/tests/game_text
+.local/tests/game_text
+"$host_cc" "${flags[@]}" tests/status_copy_test.c src/auth/status_copy.c -o .local/tests/status_copy
+.local/tests/status_copy
+"$host_cc" "${flags[@]}" tests/public_metadata_locale_test.c -o .local/tests/public_metadata_locale
+.local/tests/public_metadata_locale
 host_cxx=${HOST_CXX:-clang++}
 cppflags=(-O1 -g -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer)
 "$host_cxx" "${cppflags[@]}" -msse2 tests/overlay_copy_test.cpp -o .local/tests/overlay_copy

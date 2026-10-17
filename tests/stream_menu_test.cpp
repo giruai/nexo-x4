@@ -6,6 +6,7 @@
 #include "util/log.h"
 
 #include <cassert>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -58,6 +59,10 @@ int main(int argc, char** argv) {
     menu.setPlaybackOptions(0, false);
 
     menu.open(1, false);
+    NavInput unsupported{};
+    unsupported.l1 = unsupported.r1 = unsupported.square = unsupported.triangle = true;
+    assert(menu.handle(unsupported) == MenuAction::None);
+    assert(menu.isOpen());
     assert(menu.handle(input(&NavInput::down)) == MenuAction::None);
     assert(menu.handle(input(&NavInput::accept)) == MenuAction::ProfileChanged);
     assert(menu.playbackProfile() == 1 && menu.isOpen());
@@ -111,6 +116,19 @@ int main(int argc, char** argv) {
     assert(isMarked(menu.renderWarning(), 0, 0));
     setLanguage(Language::Spanish);
     assert(!isMarked(menu.renderWarning(), 0, 0));
+
+    // Native PS4 has one input player. Populating the upstream four-pad model
+    // must not draw disconnected slots or imply local multiplayer.
+    StreamMenu plain(fonts), withPads(fonts);
+    PadSlots pads{};
+    for (auto& pad : pads) { pad.connected = true; pad.name = "Other player"; pad.keyboard = true; }
+    withPads.setPads(pads);
+    plain.open(1, false);
+    withPads.open(1, false);
+    const Canvas& a = plain.renderMenu(info);
+    const Canvas& b = withPads.renderMenu(info);
+    assert(a.width() == b.width() && a.height() == b.height());
+    assert(std::memcmp(a.data(), b.data(), static_cast<size_t>(a.width()) * a.height() * sizeof(uint32_t)) == 0);
 
     std::cout << "stream_menu_test: ok\n";
 }

@@ -5,6 +5,7 @@
 #include "../input/gamepad.h"
 #include "../input/rumble.h"
 #include "../streaming/stream_profile.h"
+#include "../streaming/text_input.h"
 
 /* Microsoft account sign-in (OAuth 2.0 device authorization grant) on one
  * background worker. AUTHORIZED only means a Microsoft token was acquired;
@@ -137,3 +138,8 @@ void x4_auth_session_snapshot(X4Auth *auth, X4SessionSnapshot *out);
 int x4_auth_forget(X4Auth *auth);
 /* Call once busy is false. On a join error the context is kept. */
 int x4_auth_close(X4Auth *auth);
+
+/* Main-thread local game-text adapter. Text never enters public snapshots or logs. */
+X4TextEvent x4_auth_poll_game_text(X4Auth *auth, X4TextRequest *request);
+int x4_auth_complete_game_text(X4Auth *auth, const char *id, const char *text);
+int x4_auth_cancel_game_text(X4Auth *auth, const char *id);

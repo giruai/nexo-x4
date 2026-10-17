@@ -16,6 +16,7 @@
 
 /* Work configuration stays private to the two auth implementation units. */
 extern void x4_xbox_work_set_stream_profile(X4XboxWork *, int);
+extern void x4_xbox_work_set_text_input(X4XboxWork *, X4TextInput *);
 
 /* X4_AUTH_CLIENT_ID comes from auth_profile.h: one compile-time profile
  * (own registration or the temporary reference client) for the whole
@@ -78,6 +79,7 @@ struct X4Auth {
     enum X4AuthAction action;
     X4AuthWork *work;
     X4XboxWork *xwork; /* catalog and session runs only */
+    X4TextInput *text_input; /* Main owner; each RTC retains its own reference. */
     /* Private session run arguments, copied from the catalog before start. */
     X4CatalogTitle session_title;
     int selected_stream_profile, session_stream_profile;
@@ -829,6 +831,7 @@ static void session_run(X4Auth *a)
 {
     X4XboxWork *w = a->xwork;
     x4_xbox_work_set_stream_profile(w, a->session_stream_profile);
+    x4_xbox_work_set_text_input(w, a->text_input);
     if (!a->token_expiry || now() >= a->token_expiry) {
         reset_session(a, X4_SESSION_ERROR, X4_AUTH_E_SIGNED_OUT, "token Microsoft caducado",
             a->session_title.name[0] ? a->session_title.name : a->session_title.id, a->session_offering, NULL);
@@ -1195,6 +1198,11 @@ int x4_auth_start_session(X4Auth *a, unsigned index)
         x4_secure_clear(&title, sizeof(title));
         return X4_AUTH_E_ALLOCATION;
     }
+    /* No worker exists here. A fresh buffer prevents old session callbacks
+     * or replies from ever crossing into a new text transaction. */
+    x4_text_input_destroy(a->text_input);
+    a->text_input = x4_text_input_create();
+    if (!a->text_input) printf("Nexo X4: entrada de texto local no disponible\n");
     a->session_title = title;
     a->session_stream_profile = a->selected_stream_profile;
     copy_text(a->session_offering, sizeof(a->session_offering), offering);
@@ -1435,7 +1443,15 @@ int x4_auth_close(X4Auth *a)
     x4_rumble_disable(a->rumble);
     if(!x4_rumble_free(a->rumble)) return X4_AUTH_E_BUSY;
 #endif
+    x4_text_input_destroy(a->text_input);
     x4_secure_clear(a, sizeof(*a));
     free(a);
     return 0;
 }
+
+X4TextEvent x4_auth_poll_game_text(X4Auth *a, X4TextRequest *request)
+{ return a ? x4_text_input_poll(a->text_input, request) : X4_TEXT_EVENT_NONE; }
+int x4_auth_complete_game_text(X4Auth *a, const char *id, const char *text)
+{ return a ? x4_text_input_complete(a->text_input, id, text) : -1; }
+int x4_auth_cancel_game_text(X4Auth *a, const char *id)
+{ return a ? x4_text_input_cancel(a->text_input, id) : -1; }

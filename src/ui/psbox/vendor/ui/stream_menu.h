@@ -90,7 +90,14 @@ public:
                           int triggerStrength, int deadzone, bool circleConfirms,
                           bool hasCustomProfile);
     // The controllers in use, under the connection.
-    void setPads(const PadSlots& pads) { pads_ = pads; }
+    void setPads(const PadSlots& pads) {
+#ifndef X4_OPENORBIS
+        pads_ = pads;
+#else
+        // Native PS4 streaming has one input player; no decorative four-slot row.
+        (void)pads;
+#endif
+    }
 
     // References remain valid until the next render of the same layer or destruction.
     const Canvas& renderMenu(const StreamInfo& info) const;

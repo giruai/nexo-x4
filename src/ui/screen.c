@@ -136,11 +136,19 @@ void x4_media_draw(const X4DemoVideo *v, const X4DemoAudio *a, uint32_t *p)
     x4_text(p, 84, 915, 3, "X  REPETIR     CUADRADO  SONIDO     CIRCULO  VOLVER     OPTIONS  SALIR", WHITE);
 }
 
-void x4_exit_error_draw(int error, uint32_t *p)
+void x4_exit_error_draw(int error, uint32_t *p, int language)
 {
     if (!error) return;
     char message[96];
-    snprintf(message, sizeof(message), "NO SE PUDO SALIR: 0X%08X. OPTIONS PARA REINTENTAR.", (unsigned)error);
+    static const char *formats[6] = {
+        "Could not exit: 0x%08X. OPTIONS to retry.",
+        "Nao foi possivel sair: 0x%08X. OPTIONS para repetir.",
+        "No se pudo salir: 0x%08X. OPTIONS para reintentar.",
+        "Sortie impossible : 0x%08X. OPTIONS pour reessayer.",
+        "Beenden fehlgeschlagen: 0x%08X. OPTIONS zum Wiederholen.",
+        "Uscita non riuscita: 0x%08X. OPTIONS per riprovare."};
+    if (language < 0 || language >= 6) language = 2;
+    snprintf(message, sizeof(message), formats[language], (unsigned)error);
     x4_rect(p, 84, 999, 1752, 54, PANEL);
     x4_text(p, 100, 1015, 3, message, WHITE);
 }
@@ -359,8 +367,9 @@ void x4_live_status_draw(const X4LiveMediaSnapshot *m, int error, uint32_t *p)
         x4_text(p, 84, 922, 2, line, WHITE);
     }
 }
-void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, int muted, int show_controls, uint32_t *p)
+void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, int muted, int show_controls, uint32_t *p, int language)
 {
+    if (language < 0 || language >= 6) language = 2;
     /* The game already fills the framebuffer. Do not reserve/crop any rows
      * for normal playback; a fresh complete media draw also erases hints. */
     if (show_controls) {
@@ -370,10 +379,17 @@ void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, i
     }
     if (m->audio_error || s->input_error || muted) {
         char line[96];
-        const char *audio = m->audio_error ? "SONIDO NO DISPONIBLE" : muted ? "SONIDO SILENCIADO" : "";
+        static const char *labels[6][3] = {
+            {"Audio unavailable", "Audio muted", "Controller unavailable"},
+            {"Audio indisponivel", "Audio silenciado", "Controle indisponivel"},
+            {"Sonido no disponible", "Sonido silenciado", "Control no disponible"},
+            {"Audio indisponible", "Audio coupe", "Manette indisponible"},
+            {"Audio nicht verfugbar", "Audio stumm", "Controller nicht verfugbar"},
+            {"Audio non disponibile", "Audio disattivato", "Controller non disponibile"}};
+        const char *audio = m->audio_error ? labels[language][0] : muted ? labels[language][1] : "";
         snprintf(line, sizeof(line), "%s%s%s", audio,
             audio[0] && s->input_error ? " / " : "",
-            s->input_error ? "CONTROL NO DISPONIBLE" : "");
+            s->input_error ? labels[language][2] : "");
         x4_rect(p, 20, 20, 620, 36, BG);
         x4_text(p, 32, 29, 2, line, WHITE);
     }

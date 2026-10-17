@@ -36,13 +36,13 @@ std::string fmt(const char* f, double v) {
 #ifdef X4_OPENORBIS
 // These PS4-only labels live here so the upstream menu's translation table stays intact.
 const char* ps4Label(int item) {
-    static constexpr const char* labels[6][3] = {
-        {"Stream quality", "Diagnostics", "Video quality: next session"},
-        {"Qualidade do vídeo", "Diagnóstico", "Qualidade do vídeo: próxima sessão"},
-        {"Calidad de video", "Diagnóstico", "Calidad de video: próxima sesión"},
-        {"Qualité vidéo", "Diagnostic", "Qualité vidéo : prochaine session"},
-        {"Videoqualität", "Diagnose", "Videoqualität: nächste Sitzung"},
-        {"Qualità video", "Diagnostica", "Qualità video: prossima sessione"},
+    static constexpr const char* labels[6][5] = {
+        {"Stream quality", "Diagnostics", "Video quality: next session", "1080p (experimental)", "Received video"},
+        {"Qualidade do vídeo", "Diagnóstico", "Qualidade do vídeo: próxima sessão", "1080p (experimental)", "Vídeo recebido"},
+        {"Calidad de video", "Diagnóstico", "Calidad de video: próxima sesión", "1080p (experimental)", "Vídeo recibido"},
+        {"Qualité vidéo", "Diagnostic", "Qualité vidéo : prochaine session", "1080p (expérimental)", "Vidéo reçue"},
+        {"Videoqualität", "Diagnose", "Videoqualität: nächste Sitzung", "1080p (experimentell)", "Empfangenes Video"},
+        {"Qualità video", "Diagnostica", "Qualità video: prossima sessione", "1080p (sperimentale)", "Video ricevuto"},
     };
     int lang = std::clamp(static_cast<int>(language()), 0, 5);
     return labels[lang][item];
@@ -197,11 +197,14 @@ MenuAction StreamMenu::handle(const NavInput& in) {
 const Canvas& StreamMenu::renderMenu(const StreamInfo& info) const {
 #ifdef X4_OPENORBIS
     const std::string none = "-";
+    std::string received = info.fps > 0 ? fmt("%.0f fps", info.fps) : none;
+    if (info.width > 0 && info.height > 0)
+        received = std::to_string(info.width) + "x" + std::to_string(info.height) + "  " + received;
     const std::array<std::string, 6> values = {
         info.region.empty() ? none : info.region,
         info.rttMs >= 0 ? std::to_string(info.rttMs) + " ms" : none,
         info.mbps > 0 ? fmt("%.1f Mbps", info.mbps) : none,
-        info.fps > 0 ? fmt("%.0f fps", info.fps) : none,
+        received,
         info.lossPct >= 0 ? fmt("%.1f %%", info.lossPct) : none,
         info.decodeMs > 0 ? fmt("%.1f ms", info.decodeMs) : none,
     };
@@ -226,7 +229,7 @@ const Canvas& StreamMenu::renderMenu(const StreamInfo& info) const {
                             pos == 3 ? tr(Str::MenuStats) : tr(Str::MenuLeave);
         fonts_.semibold.draw(c, label, row.x + 16, fonts_.semibold.centeredY(row.y, row.h, 22), 22, ink);
         if (pos >= 1 && pos <= 3) {
-            const char* value = pos == 1 ? (playbackProfile_ ? "1080p (experimental)" : "720p") :
+            const char* value = pos == 1 ? (playbackProfile_ ? ps4Label(3) : "720p") :
                                 tr((pos == 2 ? diagnosticsOn_ : stats_) ? Str::On : Str::Off);
             int w = fonts_.semibold.measure(value, 20);
             fonts_.semibold.draw(c, value, row.x + row.w - 16 - w,
@@ -237,7 +240,7 @@ const Canvas& StreamMenu::renderMenu(const StreamInfo& info) const {
     c.fillRect({40, 428, kMenuW - 80, 2}, rgba(60, 60, 60));
     int y = 448;
     auto line = [&](Str label, const std::string& value) {
-        fonts_.regular.draw(c, tr(label), 40, y, 19, kGray);
+        fonts_.regular.draw(c, label == Str::StatFrameRate ? ps4Label(4) : tr(label), 40, y, 19, kGray);
         int w = fonts_.semibold.measure(value, 19);
         fonts_.semibold.draw(c, value, kMenuW - 40 - w, y, 19, kWhite);
         y += 34;

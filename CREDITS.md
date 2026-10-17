@@ -15,6 +15,6 @@ Thanks to the authors and maintainers of libdatachannel, libjuice, usrsctp, libs
 
 ## Technical references
 
-[OpenGNM's public examples](https://github.com/PS4-OpenGNM/freegnm-examples) informed GPU packet fields used by the original bounded readback implementation; its example notice is retained. [GreenVita](https://github.com/Day-OS/green-vita), [Better xCloud](https://github.com/redphx/better-xcloud), and [Moonlight PS4](https://github.com/JaimeJimenezG/Moonlight-ps4) were protocol or performance references. Their implementations are not incorporated merely by being cited. PSBox code that *is* incorporated is identified above and in source headers.
+[OpenGNM's public examples](https://github.com/PS4-OpenGNM/freegnm-examples) informed GPU packet fields used by the original bounded readback implementation; its example notice is retained. [GreenVita](https://github.com/Day-OS/green-vita), [Better xCloud](https://github.com/redphx/better-xcloud), and [Moonlight PS4](https://github.com/JaimeJimenezG/Moonlight-ps4) were protocol or performance references. PSBox also informed the resolution-preference and game-text transaction formats implemented by the native Nexo adapter. Their implementations are not incorporated merely by being cited. PSBox code that *is* incorporated is identified above and in source headers.
 
 Nexo X4's geometric icon and in-app mark were created for this project. They do not reproduce official platform logos or imply platform endorsement.

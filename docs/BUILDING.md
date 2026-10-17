@@ -1,6 +1,6 @@
 # Building Nexo X4
 
-This guide describes the v0.1.0 (`APP_VER` `01.32`) local build. The output is `dist/Nexo-X4-v0.1.0-ps4.pkg`. Build scripts are run from the repository root.
+This guide describes v0.1.5 (`APP_VER` `01.37`). The output is `dist/Nexo-X4-v0.1.5-ps4.pkg`. Build scripts are run from the repository root.
 
 ## Host and inputs
 
@@ -58,6 +58,6 @@ The optional public toolchain download is separate from the source bundle. Do no
 
 The dependency source bundle retains pinned upstream test certificates, sample signing keys, and test vectors. These are already-public fixtures, are not account or console credentials, and are not packaged as client secrets.
 
-## Local 0.1.1 candidate
+## Profiles and diagnostics
 
-`make` builds numeric input instrumentation with `X4_INPUT_TRACE=1` by default; its runtime switch in Options defaults off. `X4_INPUT_TRACE=0` can compile out the trigger probes. The switch does not enable diagnostic mailbox commands or capture text/account data. Build/version names come from `VERSION`, `APP_VERSION` and `src/core/build_identity.h`; keep them consistent. The 0.1.1 candidate is separate from the published 0.1.0 release and has not been validated for cloud 1080p delivery.
+`make` builds numeric input instrumentation with `X4_INPUT_TRACE=1` by default; its runtime switch in Options defaults off. `X4_INPUT_TRACE=0` can compile out the trigger probes. The switch does not enable diagnostic mailbox commands or capture text/account data. Build/version names come from `VERSION`, `APP_VERSION` and `src/core/build_identity.h`; keep them consistent. The 0.1.5 candidate is separate from the published 0.1.0 release and has not been validated for cloud 1080p delivery.

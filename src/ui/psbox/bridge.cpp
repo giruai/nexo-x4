@@ -4,7 +4,9 @@
 #include "prefs.h"
 #include "overlay_copy.h"
 #include "queue_view.h"
+#include "../../auth/status_copy.h"
 #include <climits>
+#include <cstdio>
 #include "ui/app_ui.h"
 #include "ui/strings.h"
 #include "ui/stream_menu.h"
@@ -18,6 +20,59 @@
 #include <string>
 #include <vector>
 
+enum BridgeText {
+    BT_ALL_GAMES, BT_PRESS_X_SIGN_IN, BT_LOADING_CATALOG, BT_CATALOG_ERROR,
+    BT_SIGN_IN_ERROR, BT_CONNECTING, BT_STARTING_GAME, BT_PREPARING_SESSION,
+    BT_REMOTE_CONSOLES_UNAVAILABLE, BT_SETTING_UNAVAILABLE, BT_PREFS_SAVE_ERROR,
+    BT_GAME_TEXT, BT_DPAD_CHOOSE, BT_X_TYPE, BT_TRIANGLE_CASE,
+    BT_SQUARE_DELETE, BT_R1_SPACE, BT_R2_SEND, BT_CIRCLE_CANCEL,
+    BT_UPPERCASE, BT_LOWERCASE, BT_SENDING_RESPONSE,
+    BT_CLOSING_GAME, BT_CLOSING_VIDEO_ERROR, BT_WAITING_GAME_IMAGE,
+    BT_NATIVE_MEDIA_ERROR, BT_COUNT
+};
+static const char *const bridge_texts[BT_COUNT][6] = {
+    {"All games", "Todos os jogos", "Todos los juegos", "Tous les jeux", "Alle Spiele", "Tutti i giochi"},
+    {"Press X to sign in", "Pressione X para entrar", "Pulsa X para iniciar sesión", "Appuyez sur X pour vous connecter", "X zum Anmelden drücken", "Premi X per accedere"},
+    {"Loading catalog", "Carregando catálogo", "Cargando catálogo", "Chargement du catalogue", "Katalog wird geladen", "Caricamento del catalogo"},
+    {"Could not load catalog", "Não foi possível carregar o catálogo", "No se pudo cargar el catálogo", "Impossible de charger le catalogue", "Katalog konnte nicht geladen werden", "Impossibile caricare il catalogo"},
+    {"Could not sign in", "Não foi possível entrar", "No se pudo iniciar sesión", "Connexion impossible", "Anmeldung fehlgeschlagen", "Impossibile accedere"},
+    {"Connecting", "Conectando", "Conectando", "Connexion", "Verbindung wird hergestellt", "Connessione"},
+    {"Starting game", "Iniciando jogo", "Iniciando juego", "Lancement du jeu", "Spiel wird gestartet", "Avvio del gioco"},
+    {"Preparing session", "Preparando sessão", "Preparando sesión", "Préparation de la session", "Sitzung wird vorbereitet", "Preparazione della sessione"},
+    {"Remote consoles unavailable on PS4", "Consoles remotos indisponíveis no PS4", "Consolas remotas no disponibles en PS4", "Consoles distantes indisponibles sur PS4", "Remote-Konsolen auf PS4 nicht verfügbar", "Console remote non disponibili su PS4"},
+    {"Setting unavailable on PS4", "Configuração indisponível no PS4", "Ajuste no disponible en PS4", "Réglage indisponible sur PS4", "Einstellung auf PS4 nicht verfügbar", "Impostazione non disponibile su PS4"},
+    {"Could not save preferences", "Não foi possível salvar as preferências", "No se pudieron guardar las preferencias", "Impossible d'enregistrer les préférences", "Einstellungen konnten nicht gespeichert werden", "Impossibile salvare le preferenze"},
+    {"Game text", "Texto do jogo", "Texto del juego", "Texte du jeu", "Spieltext", "Testo del gioco"},
+    {"D-pad: choose", "Direcional: escolher", "Cruceta: elegir", "Croix directionnelle : choisir", "Steuerkreuz: auswählen", "Croce direzionale: scegli"},
+    {"X: type", "X: digitar", "X: escribir", "X : saisir", "X: eingeben", "X: scrivi"},
+    {"Triangle: change case", "Triângulo: maiúsculas/minúsculas", "Triángulo: mayúsculas/minúsculas", "Triangle : majuscules/minuscules", "Dreieck: Groß-/Kleinschreibung", "Triangolo: maiuscole/minuscole"},
+    {"Square: delete", "Quadrado: apagar", "Cuadrado: borrar", "Carré : effacer", "Quadrat: löschen", "Quadrato: cancella"},
+    {"R1: space", "R1: espaço", "R1: espacio", "R1 : espace", "R1: Leerzeichen", "R1: spazio"},
+    {"R2: send", "R2: enviar", "R2: enviar", "R2 : envoyer", "R2: senden", "R2: invia"},
+    {"Circle: cancel", "Círculo: cancelar", "Círculo: cancelar", "Cercle : annuler", "Kreis: abbrechen", "Cerchio: annulla"},
+    {"Uppercase", "Maiúsculas", "Mayúsculas", "Majuscules", "Großbuchstaben", "Maiuscole"},
+    {"Lowercase", "Minúsculas", "Minúsculas", "Minuscules", "Kleinbuchstaben", "Minuscole"},
+    {"Sending response…", "Enviando resposta…", "Enviando respuesta…", "Envoi de la réponse…", "Antwort wird gesendet…", "Invio della risposta…"},
+    {"Closing game", "Encerrando jogo", "Cerrando juego", "Fermeture du jeu", "Spiel wird geschlossen", "Chiusura del gioco"},
+    {"Closing game after video error", "Encerrando jogo após erro de vídeo", "Cerrando juego tras error de video", "Fermeture du jeu après erreur vidéo", "Spiel wird nach Videofehler geschlossen", "Chiusura del gioco dopo errore video"},
+    {"Waiting for game video", "Aguardando vídeo do jogo", "Esperando imagen del juego", "Attente de la vidéo du jeu", "Warte auf Spielbild", "In attesa del video del gioco"},
+    {"Could not prepare or close native media", "Não foi possível preparar ou fechar a mídia nativa", "No se pudieron preparar o cerrar los medios nativos", "Impossible de préparer ou fermer les médias natifs", "Native Medien konnten nicht vorbereitet oder geschlossen werden", "Impossibile preparare o chiudere i contenuti multimediali nativi"},
+};
+static const char *bridge_text(int language, BridgeText key) {
+    if (language < 0 || language >= X4_STATUS_LANGUAGES) language = X4_STATUS_EN;
+    return bridge_texts[key][language];
+}
+static std::string bridge_status(int language, const char *raw) {
+    if (!raw) return {};
+    if (!std::strcmp(raw, "Cerrando juego")) return bridge_text(language, BT_CLOSING_GAME);
+    if (!std::strcmp(raw, "Cerrando juego tras error de video")) return bridge_text(language, BT_CLOSING_VIDEO_ERROR);
+    if (!std::strcmp(raw, "Esperando imagen del juego")) return bridge_text(language, BT_WAITING_GAME_IMAGE);
+    if (!std::strcmp(raw, "no se pudieron preparar o cerrar los medios nativos")) return bridge_text(language, BT_NATIVE_MEDIA_ERROR);
+    char translated[512];
+    x4_status_format(translated, sizeof(translated), raw, language);
+    return translated;
+}
+
 struct X4PsboxUi {
     xc::ui::Fonts fonts;
     std::atomic<bool> image_ready{false};
@@ -25,6 +80,10 @@ struct X4PsboxUi {
     xc::ui::AppUi app;
     xc::ui::StreamMenu menu;
     xc::ui::Canvas canvas;
+    std::unique_ptr<xc::ui::Canvas> text_canvas;
+    unsigned text_canvas_revision = 0;
+    int text_canvas_pending = -1;
+    int text_canvas_language = -1;
     std::vector<X4CatalogTitle> titles;
     std::map<std::string, X4PsboxMetadata> metadata;
     std::vector<X4PsboxCuratedRow> curated;
@@ -88,7 +147,7 @@ struct X4PsboxUi {
             if (!row.tiles.empty()) rows.push_back(std::move(row));
         }
         xc::ui::GameRow grid;
-        grid.title = "Todos los juegos";
+        grid.title = bridge_text(prefs.language, BT_ALL_GAMES);
         grid.gamePassBadges = false;
         grid.isGrid = true;
         grid.tiles = all;
@@ -114,11 +173,11 @@ extern "C" X4PsboxUi* x4_psbox_create(const char* font_dir) {
     xc::ui::SettingsChoice settings;
     settings.language = 2; settings.resolution = 1;
     ui->app.setSettings(settings);
-    ui->app.showSplash("Pulsa X para iniciar sesión");
+    ui->app.showSplash(bridge_text(ui->prefs.language, BT_PRESS_X_SIGN_IN));
     return ui.release();
 }
 
-extern "C" void x4_psbox_destroy(X4PsboxUi* ui) { delete ui; }
+extern "C" void x4_psbox_destroy(X4PsboxUi* ui) { x4_psbox_game_text_clear(ui); delete ui; }
 
 extern "C" int x4_psbox_set_prefs_dir(X4PsboxUi* ui, const char* directory) {
     if (!ui || !directory) return -1;
@@ -134,6 +193,8 @@ extern "C" int x4_psbox_set_prefs_dir(X4PsboxUi* ui, const char* directory) {
     ui->menu.setPlaybackOptions(ui->prefs.stream_profile, ui->prefs.diagnostics);
     ui->app.setSettings(settings);
     ui->app.setPrefs(ui->prefs.hidden, static_cast<xc::ui::LibrarySort>(ui->prefs.sort));
+    if (ui->auth_state == X4_AUTH_IDLE)
+        ui->app.showSplash(bridge_text(ui->prefs.language, BT_PRESS_X_SIGN_IN));
     ui->app.invalidate();
     return 0;
 }
@@ -142,11 +203,13 @@ extern "C" int x4_psbox_set_catalog(X4PsboxUi* ui, const X4CatalogSnapshot* cata
     if (!ui || !catalog || catalog->count > X4_CATALOG_MAX) return -1;
     ui->catalog_state = catalog->state;
     if (catalog->state == X4_CATALOG_LOADING) {
-        ui->app.showSplash(catalog->stage[0] ? catalog->stage : "Cargando catálogo");
+        ui->app.showSplash(catalog->stage[0] ? bridge_status(ui->prefs.language, catalog->stage) :
+            bridge_text(ui->prefs.language, BT_LOADING_CATALOG));
         return 0;
     }
     if (catalog->state == X4_CATALOG_ERROR) {
-        ui->app.showError(catalog->stage[0] ? catalog->stage : "No se pudo cargar el catálogo");
+        ui->app.showError(catalog->stage[0] ? bridge_status(ui->prefs.language, catalog->stage) :
+            bridge_text(ui->prefs.language, BT_CATALOG_ERROR));
         return 0;
     }
     if (catalog->state != X4_CATALOG_READY || catalog->truncated) return -1;
@@ -224,14 +287,18 @@ extern "C" void x4_psbox_set_auth(X4PsboxUi* ui, const X4AuthSnapshot* auth) {
     if (auth->state == X4_AUTH_WAITING) {
         ui->app.showSignIn(auth->user_code, auth->verification_uri);
     } else if (auth->state == X4_AUTH_ERROR || auth->state == X4_AUTH_DENIED || auth->state == X4_AUTH_EXPIRED) {
-        ui->app.showError(auth->stage[0] ? auth->stage : "No se pudo iniciar sesión");
+        ui->app.showError(auth->stage[0] ? bridge_status(ui->prefs.language, auth->stage) :
+            bridge_text(ui->prefs.language, BT_SIGN_IN_ERROR));
     } else if (auth->state == X4_AUTH_CONNECTING || auth->state == X4_AUTH_CONNECTED) {
-        ui->app.showSplash(auth->stage[0] ? auth->stage : "Conectando");
+        ui->app.showSplash(auth->stage[0] ? bridge_status(ui->prefs.language, auth->stage) :
+            bridge_text(ui->prefs.language, BT_CONNECTING));
     } else if (auth->state == X4_AUTH_IDLE || auth->state == X4_AUTH_CANCELLED) {
         xc::ui::SettingsChoice settings;
-    settings.language = 2; settings.resolution = 1;
-    ui->app.setSettings(settings);
-    ui->app.showSplash("Pulsa X para iniciar sesión");
+        settings.language = ui->prefs.language;
+        settings.resolution = ui->prefs.stream_profile ? 0 : 1;
+        settings.diagnostics = ui->prefs.diagnostics;
+        ui->app.setSettings(settings);
+        ui->app.showSplash(bridge_text(ui->prefs.language, BT_PRESS_X_SIGN_IN));
     }
 }
 
@@ -241,8 +308,10 @@ extern "C" void x4_psbox_set_launch(X4PsboxUi* ui, const char* title_id, const c
     // restored Home. Only a new active session can reopen the launch screen.
     if (ui->session_terminal) return;
     xc::ui::GameTile game;
-    if (title_id && ui->app.findTile(title_id, game)) ui->app.showLaunching(game, status ? status : "");
-    else ui->app.showSplash(status ? status : "Iniciando juego");
+    const std::string shown = status ? bridge_status(ui->prefs.language, status) :
+        bridge_text(ui->prefs.language, BT_STARTING_GAME);
+    if (title_id && ui->app.findTile(title_id, game)) ui->app.showLaunching(game, shown);
+    else ui->app.showSplash(shown);
 }
 
 extern "C" void x4_psbox_set_session(X4PsboxUi* ui, const X4SessionSnapshot* session,
@@ -271,6 +340,7 @@ extern "C" void x4_psbox_set_session(X4PsboxUi* ui, const X4SessionSnapshot* ses
     std::string queue_details;
     if (session->state == X4_SESSION_WAITING) {
         X4QueueViewInput view{};
+        view.language = ui->prefs.language;
         view.elapsed_seconds = session->elapsed_seconds;
         view.allocation_seconds = estimate.present_mask & X4_QUEUE_ALLOCATION ?
             static_cast<int>(estimate.allocation_seconds) : -1;
@@ -299,13 +369,15 @@ extern "C" void x4_psbox_set_session(X4PsboxUi* ui, const X4SessionSnapshot* ses
             queue_details += text.lines[i];
         }
     }
-    const char* stage = session->stage[0] ? session->stage : "Preparando sesión";
+    const std::string stage = session->stage[0] ? bridge_status(ui->prefs.language, session->stage) :
+        bridge_text(ui->prefs.language, BT_PREPARING_SESSION);
     switch (session->state) {
     case X4_SESSION_STARTING: case X4_SESSION_WAITING: case X4_SESSION_READY:
     case X4_SESSION_AUTHORIZING: case X4_SESSION_AUTHORIZED:
     case X4_SESSION_NEGOTIATING: case X4_SESSION_CONNECTING:
         ui->session_terminal = false;
-        x4_psbox_set_launch(ui, title_id, stage);
+        x4_psbox_set_launch(ui, title_id, session->stage[0] ? session->stage :
+            bridge_text(ui->prefs.language, BT_PREPARING_SESSION));
         ui->app.setQueueInfo(queue_details);
         break;
     case X4_SESSION_STREAMING:
@@ -321,7 +393,8 @@ extern "C" void x4_psbox_set_session(X4PsboxUi* ui, const X4SessionSnapshot* ses
     }
     case X4_SESSION_STOPPING:
         ui->session_terminal = false;
-        x4_psbox_set_launch(ui, title_id, stage);
+        x4_psbox_set_launch(ui, title_id, session->stage[0] ? session->stage :
+            bridge_text(ui->prefs.language, BT_PREPARING_SESSION));
         ui->app.setQueueInfo(queue_details);
         break;
     case X4_SESSION_CLOSED: case X4_SESSION_CANCELLED:
@@ -344,10 +417,6 @@ extern "C" X4PsboxEvent x4_psbox_handle(X4PsboxUi* ui, const X4PsboxPad* pad) {
          ui->auth_state == X4_AUTH_ERROR || ui->auth_state == X4_AUTH_EXPIRED) &&
         (pad->pressed & X4_PSB_CROSS)) {
         out.action = X4_PSB_ACTION_SIGN_IN;
-        return out;
-    }
-    if (ui->app.screen() == xc::ui::Screen::Details && (pad->pressed & X4_PSB_OPTIONS)) {
-        out.action = X4_PSB_ACTION_UNSUPPORTED_SETTING;
         return out;
     }
     xc::ui::NavInput nav;
@@ -375,7 +444,7 @@ extern "C" X4PsboxEvent x4_psbox_handle(X4PsboxUi* ui, const X4PsboxPad* pad) {
     xc::ui::UiEvent event = ui->app.handle(nav);
     if (ui->app.tab() == xc::ui::Tab::Consoles) {
         ui->app.showTab(xc::ui::Tab::GamePass);
-        ui->app.showHome("Consolas remotas no disponibles en PS4");
+        ui->app.showHome(bridge_text(ui->prefs.language, BT_REMOTE_CONSOLES_UNAVAILABLE));
     }
     switch (event.action) {
     case xc::ui::Action::Play:
@@ -402,26 +471,33 @@ extern "C" X4PsboxEvent x4_psbox_handle(X4PsboxUi* ui, const X4PsboxPad* pad) {
     case xc::ui::Action::SettingsChanged:
         if (event.settings.language >= 0 &&
             event.settings.language < static_cast<int>(xc::ui::Language::Count)) {
+            const int old_language = ui->prefs.language;
             xc::ui::setLanguage(static_cast<xc::ui::Language>(event.settings.language));
             ui->prefs.language = event.settings.language;
             ui->prefs.stream_profile = event.settings.resolution == 0 ? 1 : 0;
             ui->prefs.diagnostics = event.settings.diagnostics;
             ui->menu.setPlaybackOptions(ui->prefs.stream_profile, ui->prefs.diagnostics);
-            if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs))
+            if (old_language != ui->prefs.language && ui->catalog_state == X4_CATALOG_READY)
+                (void)ui->compose();
+            if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs)) {
                 out.action = X4_PSB_ACTION_PREFS_SAVE_FAILED;
+                ui->app.showHome(bridge_text(ui->prefs.language, BT_PREFS_SAVE_ERROR));
+            }
             ui->app.invalidate();
         }
         break;
     case xc::ui::Action::PrefsChanged:
         ui->prefs.hidden = event.hidden;
         ui->prefs.sort = static_cast<int>(event.librarySort);
-        if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs))
+        if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs)) {
             out.action = X4_PSB_ACTION_PREFS_SAVE_FAILED;
+            ui->app.showHome(bridge_text(ui->prefs.language, BT_PREFS_SAVE_ERROR));
+        }
         break;
     case xc::ui::Action::GameSettingsChanged:
     case xc::ui::Action::LoginCountry:
         out.action = X4_PSB_ACTION_UNSUPPORTED_SETTING;
-        ui->app.showHome("Ajuste no disponible en PS4");
+        ui->app.showHome(bridge_text(ui->prefs.language, BT_SETTING_UNAVAILABLE));
         break;
     default: break;
     }
@@ -503,8 +579,10 @@ extern "C" enum X4PsboxMenuAction x4_psbox_menu_handle(X4PsboxUi* ui, const X4Ps
         settings.resolution = ui->prefs.stream_profile ? 0 : 1;
         settings.diagnostics = ui->prefs.diagnostics;
         ui->app.setSettings(settings);
-        if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs))
+        if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs)) {
+            ui->app.showHome(bridge_text(ui->prefs.language, BT_PREFS_SAVE_ERROR));
             return X4_PSB_MENU_PREFS_FAILED;
+        }
         return old_profile != ui->prefs.stream_profile ? X4_PSB_MENU_PROFILE : X4_PSB_MENU_DIAGNOSTICS;
     }
     default: return X4_PSB_MENU_NONE;
@@ -548,3 +626,78 @@ extern "C" int x4_psbox_menu_composite(X4PsboxUi* ui, uint32_t* pixels,
     }
     return 0;
 }
+
+extern "C" void x4_psbox_game_text_clear(X4PsboxUi *ui) {
+    if (!ui || !ui->text_canvas) return;
+    volatile uint32_t *pixels = ui->text_canvas->data();
+    for (size_t i = 0; i < 1710u * 870u; ++i) pixels[i] = 0;
+    ui->text_canvas.reset();
+    ui->text_canvas_pending = -1;
+    ui->text_canvas_language = -1;
+}
+
+extern "C" int x4_psbox_game_text_composite(X4PsboxUi *ui, const X4GameText *text,
+    uint32_t *pixels, size_t pixel_count, unsigned revision, int pending) {
+    if (!ui || !text || !text->active || !pixels || pixel_count < 1920u*1080u) return -1;
+    bool fresh = !ui->text_canvas;
+    if (fresh) ui->text_canvas = std::make_unique<xc::ui::Canvas>(1710, 870);
+    auto& c = *ui->text_canvas;
+    using namespace xc::ui;
+    if (fresh || revision != ui->text_canvas_revision || pending != ui->text_canvas_pending ||
+        ui->prefs.language != ui->text_canvas_language) {
+        c.fillRect({0,0,1710,870}, rgba(16,20,29));
+        c.strokeRect({0,0,1710,870}, rgba(76,157,198), 2, 14);
+        auto draw = [&](const std::string& value, int x, int y, int size, int width, uint32_t color) {
+            std::string clean = value;
+            for (char& ch : clean) if (static_cast<unsigned char>(ch) < 32) ch = ' ';
+            ui->fonts.regular.draw(c, ui->fonts.regular.fit(clean, size, width), x, y, size, color);
+        };
+        draw(bridge_text(ui->prefs.language, BT_GAME_TEXT), 60,45,32,1588,rgba(246,249,252));
+        draw(text->request.title,60,100,28,1588,rgba(246,249,252));
+        draw(text->request.description,60,145,22,1588,rgba(170,184,200));
+        c.fillRect({60,205,1590,90},rgba(5,10,17),8);
+        // Font fitting preserves valid UTF-8; request text never goes to a log.
+        std::string visible(text->text);
+        while (!visible.empty() && ui->fonts.regular.measure(visible, 28) > 1510) {
+            size_t next = 1;
+            while (next < visible.size() && (static_cast<unsigned char>(visible[next]) & 0xc0) == 0x80) ++next;
+            visible.erase(0, next);
+        }
+        draw(visible + "|",80,230,28,1550,rgba(246,249,252));
+        const char *keys = x4_game_text_keys();
+        for (unsigned i=0; i<x4_game_text_key_count(); ++i) {
+            int x=65+static_cast<int>(i%6)*155, y=340+static_cast<int>(i/6)*55;
+            bool selected = i==text->cursor;
+            c.fillRect({x,y,130,46},selected?rgba(83,203,153):rgba(6,12,21),6);
+            char key=keys[i]; if(text->uppercase && key>='a' && key<='z') key-=32;
+            ui->fonts.regular.draw(c,std::string(1,key),x+50,y+8,26,
+                selected?rgba(5,12,20):rgba(246,249,252));
+        }
+        const char *hints[]={bridge_text(ui->prefs.language, BT_DPAD_CHOOSE),
+            bridge_text(ui->prefs.language, BT_X_TYPE),
+            bridge_text(ui->prefs.language, BT_TRIANGLE_CASE),
+            bridge_text(ui->prefs.language, BT_SQUARE_DELETE),
+            bridge_text(ui->prefs.language, BT_R1_SPACE),
+            bridge_text(ui->prefs.language, BT_R2_SEND),
+            bridge_text(ui->prefs.language, BT_CIRCLE_CANCEL)};
+        for (int i=0; i<7; ++i) draw(hints[i],1075,345+i*52,22,565,rgba(216,229,240));
+        draw(bridge_text(ui->prefs.language, text->uppercase ? BT_UPPERCASE : BT_LOWERCASE),
+            1075,725,22,565,rgba(83,203,153));
+        char count[64]; std::snprintf(count,sizeof(count),"%u / %u",text->chars,text->request.max_chars);
+        draw(count,60,810,22,800,rgba(170,184,200));
+        if (pending) draw(bridge_text(ui->prefs.language, BT_SENDING_RESPONSE),
+            1075,785,22,565,rgba(83,203,153));
+        ui->text_canvas_revision=revision; ui->text_canvas_pending=pending;
+        ui->text_canvas_language=ui->prefs.language;
+    }
+    composite_canvas(pixels,c,105,106);
+    return 0;
+}
+
+extern "C" int x4_psbox_language(const X4PsboxUi *ui) { return ui ? ui->prefs.language : 2; }
+
+extern "C" void x4_psbox_show_closing(X4PsboxUi *ui) {
+    if (ui) ui->app.showSplash(bridge_text(ui->prefs.language, BT_CLOSING_GAME));
+}
+
+extern "C" int x4_psbox_settings_open(const X4PsboxUi *ui) { return ui && ui->app.screen() == xc::ui::Screen::Settings; }

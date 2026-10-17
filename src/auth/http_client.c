@@ -44,16 +44,6 @@ static const char *const login_urls[] = {
     "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user",
     "https://xgpuwebf2p.gssv-play-prod.xboxlive.com/v2/login/user",
 };
-static const char gamepass_light_url[] =
-    "https://catalog.gamepass.com/v3/products?market=MX&language=es-MX&hydration=RemoteLowJade0";
-static const char gamepass_detail_url[] =
-    "https://catalog.gamepass.com/v3/products?market=MX&language=es-MX&hydration=RemoteHighSapphire0";
-static const char *const gamepass_sigl_urls[X4_SIGL_COUNT] = {
-    "https://catalog.gamepass.com/sigls/v2?id=06323672-b8c8-43cc-b0de-32d5a9834749&market=MX&language=es-MX",
-    "https://catalog.gamepass.com/sigls/v2?id=6a589fa0-d493-472b-8e20-3813699d7056&market=MX&language=es-MX",
-    "https://catalog.gamepass.com/sigls/v2?id=d8f4afcd-882a-49e3-86b3-f61fa0172b75&market=MX&language=es-MX",
-    "https://catalog.gamepass.com/sigls/v2?id=31ff2361-2772-4622-849b-f4f1abb4ad1b&market=MX&language=es-MX",
-};
 static const char image_prefix[] = "https://store-images.s-microsoft.com/image/";
 static const char https_scheme[] = "https://";
 static const char gssv_suffix[] = ".gssv-play-prod.xboxlive.com";
@@ -92,6 +82,7 @@ struct X4Http {
     int32_t pool, ssl, http;
     bool unusable, quarantined;
     atomic_bool busy;
+    int public_language; /* Worker-owned; only the public Game Pass routes use it. */
     /* Written by the worker, read by the UI; always a string literal. */
     _Atomic(const char *) stage;
     struct {
@@ -174,6 +165,7 @@ X4Http *x4_http_open(int *error)
     *h = (X4Http){
         .net_module = -1, .ssl_module = -1, .http_module = -1,
         .pool = -1, .ssl = -1, .http = -1, .stage = "modulos de red",
+        .public_language = 2,
     };
     atomic_init(&h->busy, false);
     int rc;
@@ -250,6 +242,14 @@ fail:
     free(h);
     if (error) *error = rc;
     return NULL;
+}
+
+int x4_http_set_public_language(X4Http *h, int language)
+{
+    if (!h || !x4_http_public_locale(language)) return X4_HTTP_ARGUMENT;
+    if (atomic_load(&h->busy)) return X4_HTTP_BUSY;
+    h->public_language = language;
+    return 0;
 }
 
 void x4_http_close(X4Http *h)
@@ -860,7 +860,9 @@ static int perform_gamepass(X4Http *h, int detailed, const char *json, char *bod
     size_t json_size = 0;
     int rc = check_json(json, &json_size);
     if (rc) { h->stage = "cuerpo JSON rechazado"; return rc; }
-    const char *url = detailed ? gamepass_detail_url : gamepass_light_url;
+    char url[160];
+    if (x4_http_public_products_url(h->public_language, detailed, url, sizeof(url)))
+        return X4_HTTP_BOUND;
     /* Public endpoint contract used by PSBox; fixed literals, no identity or
      * bearer value can enter this request. */
     const X4HttpHeader headers[] = {
@@ -1134,7 +1136,12 @@ int x4_http_gamepass_sigl(X4Http *h, enum X4GamepassSigl list, char *body,
             *length = 0; *status = 0;
             printf("Nexo X4: PSBox SIGL reintento lista=%d intento=2\n", (int)list);
         }
-        Owned *o = own(X4_HTTP_METHOD_GET, gamepass_sigl_urls[list], NULL, 0, NULL, NULL, 0);
+        char url[160];
+        if (x4_http_public_sigl_url(h->public_language, list, url, sizeof(url))) {
+            rc = X4_HTTP_BOUND;
+            break;
+        }
+        Owned *o = own(X4_HTTP_METHOD_GET, url, NULL, 0, NULL, NULL, 0);
         rc = o ? transfer(h, o, "gamepass-sigl", false, body, capacity, length, status, cancel, 0)
                : X4_HTTP_ALLOCATION;
         if (attempt || h->unusable || h->quarantined ||

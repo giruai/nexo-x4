@@ -56,6 +56,8 @@ struct X4Rtc {
     X4Rumble *rumble;
 #endif
     uint64_t diagnostic_pli_ordinal; /* Session owner is the sole writer. */
+    X4TextInput *text_input; /* Retained until callbacks have joined and RTC frees. */
+    char text_pending[X4_TEXT_WIRE_MAX];
     bool handshake_ack, startup_sent;
     uint64_t started_at;
     X4GamepadSource input_source;
@@ -527,6 +529,7 @@ static void *input_sender(void *pointer)
         trace_was_enabled = trace_enabled;
 #endif
         uint64_t until=sceKernelGetProcessTime()+INPUT_INTERVAL_USEC;
+        x4_rtc_pump_text(rtc); /* Sole pump owner; independent of HTTP signaling latency. */
         lock(&rtc->data_gate);
         X4GamepadSource source=rtc->input_source;
         void *user=rtc->input_user;
@@ -602,7 +605,8 @@ static void start_channels(X4Rtc *rtc)
     /* Provider protocol constants, matching pinned GreenVita/Greenlight. */
     int rc = send_text(control, "{\"message\":\"authorizationRequest\",\"accessKey\":\"4BDB3609-C1F1-4195-9B37-FEFF45DA8B8E\"}");
     rc |= send_text(control, "{\"message\":\"gamepadChanged\",\"gamepadIndex\":0,\"wasAdded\":true}");
-    rc |= startup_message(message, "/streaming/systemUi/configuration", "{\"version\":[0,2,0],\"systemUis\":[]}");
+    rc |= startup_message(message, "/streaming/systemUi/configuration", rtc->text_input ?
+        "{\"version\":[0,2,0],\"systemUis\":[10]}" : "{\"version\":[0,2,0],\"systemUis\":[]}");
     rc |= startup_message(message, "/streaming/properties/clientappinstallidchanged", "{\"clientAppInstallId\":\"f9ac8684-1032-4131-bb47-d2f58da9bb93\"}");
     rc |= startup_message(message, "/streaming/characteristics/orientationchanged", "{\"orientation\":0}");
     rc |= startup_message(message, "/streaming/characteristics/touchinputenabledchanged", "{\"touchInputEnabled\":false}");
@@ -616,6 +620,14 @@ static void start_channels(X4Rtc *rtc)
         p.width, p.height, p.fps, p.max_kbps);
     rc |= startup_message(message, "/streaming/characteristics/clientdevicecapabilities", capabilities);
     rc |= startup_message(message, "/streaming/characteristics/dimensionschanged", dimensions);
+    char resolution_request[128];
+    int resolution_rc = x4_stream_profile_resolution_message(p, resolution_request, sizeof(resolution_request));
+    if (resolution_rc >= 0) resolution_rc = rtcSendMessage(control, resolution_request, (int)strlen(resolution_request));
+    /* Optional resolution preference is separate from connection readiness.
+     * A local send success is not a server acceptance or a decoded size. */
+    printf("Nexo X4: RTC resolution preference height=%u local_send_rc=%d (not server ACK)\n",
+        p.height, resolution_rc);
+
     if (rc < 0) fail(rtc, -42);
     else {atomic_store(&rtc->startup_complete,true);printf("Nexo X4: RTC canales Xbox preparados\n");}
 }
@@ -652,6 +664,12 @@ static void channel_message(int channel, const char *data, int size, void *point
     if (channel == rtc->channels[2] && size >= 0 && data && rtc->rumble)
         (void)x4_rumble_receive(rtc->rumble, data, length, sceKernelGetProcessTime());
 #endif
+    if (channel == rtc->channels[3] && data && length && length < X4_TEXT_WIRE_MAX && rtc->text_input) {
+        /* Xbox uses TextEncoder/binary JSON as well as text datachannel frames. */
+        int text_result = x4_text_input_receive(rtc->text_input, data, length);
+        if (x4_input_diagnostics_enabled() && text_result)
+            printf("Nexo text: received binary=%d bytes=%u result=%d\n", size >= 0, (unsigned)length, text_result);
+    }
     if (channel == rtc->channels[3] && data && length && length <= 4096) {
         char type[32];
         X4JsonField field = {.name="type", .kind=X4_JSON_STRING, .text=type, .capacity=sizeof(type)};
@@ -926,6 +944,24 @@ int x4_rtc_request_keyframe(X4Rtc *rtc)
     x4_trace_record(trace, X4_TRACE_PLI_RESULT, 2, ordinal, (uint32_t)rc);
     return rc;
 }
+void x4_rtc_set_text_input(X4Rtc *rtc, X4TextInput *input)
+{
+    if (!rtc || rtc->text_input || atomic_load(&rtc->startup_complete)) return;
+    rtc->text_input = x4_text_input_retain(input);
+}
+void x4_rtc_pump_text(X4Rtc *rtc)
+{
+    if (!rtc || !rtc->text_input || !atomic_load(&rtc->startup_complete) ||
+        !rtcIsOpen(rtc->channels[3])) return;
+    if (!rtc->text_pending[0] &&
+        x4_text_input_take_outbound(rtc->text_input, rtc->text_pending, sizeof(rtc->text_pending)) != 1) return;
+    int text_rc = rtcSendMessage(rtc->channels[3], rtc->text_pending, (int)strlen(rtc->text_pending));
+    if (x4_input_diagnostics_enabled()) printf("Nexo text: reply local_send_rc=%d\n", text_rc);
+    if (text_rc >= 0) {
+        volatile unsigned char *p = (unsigned char *)rtc->text_pending;
+        for (size_t i=0; i<sizeof(rtc->text_pending); ++i) p[i]=0;
+    } /* Preserve a locally unsent reply for the next bounded worker pump. */
+}
 int x4_rtc_close(X4Rtc *rtc)
 {
     if(!rtc)return 0;
@@ -982,6 +1018,7 @@ int x4_rtc_close(X4Rtc *rtc)
 #endif
     x4_nack_grace_inbox_unbind(rtc->grace_inbox);
     x4_rtc_receive_detach(rtc->diagnostic_trace);
+    x4_text_input_destroy(rtc->text_input);
     volatile unsigned char *wipe=(unsigned char *)rtc;for(size_t i=0;i<sizeof(*rtc);++i)wipe[i]=0;
     free(rtc);
     return 0;

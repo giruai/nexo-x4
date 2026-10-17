@@ -8,7 +8,10 @@
 #include "../input/controller.h"
 #include "../input/diagnostics.h"
 #include "../ui/screen.h"
+#include "../ui/game_text.h"
+#include "stream_input_guard.h"
 #include "../auth/auth_profile.h"
+#include "../auth/http_client.h"
 #include "../media/live_media.h"
 #include "lifecycle.h"
 #include "build_identity.h"
@@ -18,6 +21,7 @@
 #include "auto_restore_policy.h"
 #include "../ui/psbox/bridge.h"
 #include "../ui/psbox_backend/metadata.h"
+#include "../ui/psbox_backend/backend.h"
 #include "../media/live_scale.h"
 #endif
 #if X4_DEV_CONTROL
@@ -99,6 +103,10 @@ int main(void)
     static X4CatalogBrowser catalog_browser;
     X4AuthCatalogCursor catalog_cursor = {0};
     X4SessionSnapshot session = {0};
+    X4GameText game_text = {0};
+    X4StreamInputGuard text_input_guard = {0};
+    unsigned text_revision = 0;
+    int text_armed = 0, text_terminal = 0;
     unsigned catalog_selected = 0;
     unsigned request_play_index = 0;
     int request_play = 0;
@@ -113,7 +121,7 @@ int main(void)
     bool live_presented = false;
     bool diagnostic_stable = false;
     uint64_t diagnostic_mark = 0;
-    int overlay_key[11] = {0};
+    int overlay_key[13] = {0};
     uint64_t overlay_at = 0;
     uint64_t input_previous = 0, input_report_at = 0;
     uint64_t input_intervals = 0, input_interval_us = 0, input_interval_max_us = 0;
@@ -164,6 +172,7 @@ reopen_interface:;
         if (x4_psbox_set_prefs_dir(psbox, "/data/xcloud4-ui") < 0)
             printf("Nexo X4: preferencias PSBox no disponibles\n");
         psbox_backend = x4_psbox_backend_create();
+        if (psbox_backend) (void)x4_psbox_backend_set_language(psbox_backend, x4_psbox_language(psbox));
         screen.page = 5;
         psbox_auth_valid = psbox_session_valid = 0;
         psbox_catalog_requested = psbox_forget_pending = 0;
@@ -237,17 +246,80 @@ reopen_interface:;
         else if (session.rtc_connected) game_controls = 1;
         bool game_input = screen.page == 6 && game_controls && x4_auth_busy(auth) &&
             !closing && !session_back && !live_error;
+        bool text_was_active = game_text.active != 0;
+        X4TextRequest text_request;
+        X4TextEvent text_event = x4_auth_poll_game_text(auth, &text_request);
+        if (text_event != X4_TEXT_EVENT_NONE && x4_input_diagnostics_enabled())
+            printf("Nexo text: main_event=%d\n", (int)text_event);
+        if (text_event == X4_TEXT_EVENT_WITHDRAWN || !game_input) {
+            if (game_text.active) {
+                if (text_event != X4_TEXT_EVENT_WITHDRAWN)
+                    (void)x4_auth_cancel_game_text(auth, game_text.request.id);
+                x4_game_text_close(&game_text); ++text_revision;
+            }
+            text_armed = text_terminal = 0;
+        }
+        if (text_event == X4_TEXT_EVENT_REQUEST) {
+            if (!game_input || x4_game_text_open(&game_text, &text_request) != 0)
+                (void)x4_auth_cancel_game_text(auth, text_request.id);
+            text_armed = text_terminal = 0; ++text_revision;
+        }
+        /* Never retain typed/default text in a per-frame temporary. */
+        x4_secure_clear(&text_request, sizeof(text_request));
+        if (game_text.active) {
+#if X4_PSBOX_UI
+            if (psbox && x4_psbox_menu_open(psbox)) x4_psbox_menu_toggle(psbox);
+#endif
+            bool neutral = !controller.data.buttons && controller.data.analogButtons.l2 <= 8 &&
+                controller.data.analogButtons.r2 <= 8;
+            if (!text_armed) text_armed = neutral;
+            else {
+                uint32_t pressed = controller.pressed;
+                X4GameTextResult result = X4_GAME_TEXT_EDITING;
+                if (pressed & ORBIS_PAD_BUTTON_CIRCLE) result = X4_GAME_TEXT_CANCELLED;
+                else if (!text_terminal) {
+                    if (pressed & ORBIS_PAD_BUTTON_R2) result = X4_GAME_TEXT_DONE;
+                    else if (pressed & ORBIS_PAD_BUTTON_CROSS) result = x4_game_text_key(&game_text, X4_GAME_TEXT_INSERT);
+                    else if (pressed & ORBIS_PAD_BUTTON_SQUARE) result = x4_game_text_key(&game_text, X4_GAME_TEXT_BACKSPACE);
+                    else if (pressed & ORBIS_PAD_BUTTON_TRIANGLE) result = x4_game_text_key(&game_text, X4_GAME_TEXT_CASE);
+                    else if (pressed & ORBIS_PAD_BUTTON_R1) result = x4_game_text_key(&game_text, X4_GAME_TEXT_SPACE);
+                    else if (pressed & ORBIS_PAD_BUTTON_UP) result = x4_game_text_key(&game_text, X4_GAME_TEXT_UP);
+                    else if (pressed & ORBIS_PAD_BUTTON_DOWN) result = x4_game_text_key(&game_text, X4_GAME_TEXT_DOWN);
+                    else if (pressed & ORBIS_PAD_BUTTON_LEFT) result = x4_game_text_key(&game_text, X4_GAME_TEXT_LEFT);
+                    else if (pressed & ORBIS_PAD_BUTTON_RIGHT) result = x4_game_text_key(&game_text, X4_GAME_TEXT_RIGHT);
+                    if (pressed) ++text_revision;
+                }
+                if (result == X4_GAME_TEXT_DONE) text_terminal = 1;
+                else if (result == X4_GAME_TEXT_CANCELLED) text_terminal = 2;
+            }
+            if (text_terminal) {
+                int text_rc = text_terminal == 1 ?
+                    x4_auth_complete_game_text(auth, game_text.request.id, game_text.text) :
+                    x4_auth_cancel_game_text(auth, game_text.request.id);
+                if (!text_rc) {
+                    x4_game_text_close(&game_text); text_terminal = text_armed = 0; ++text_revision;
+                } /* Keep the local widget and retry if the bounded reply queue is full. */
+            }
+        }
+#if X4_PSBOX_UI
+        if (text_was_active && !game_text.active && psbox) x4_psbox_game_text_clear(psbox);
+#endif
+        const OrbisPadData *text_pad = &controller.data;
+        bool text_capture = x4_stream_input_guard_step(&text_input_guard,
+            text_was_active || game_text.active, text_pad->buttons,
+            text_pad->leftStick.x, text_pad->leftStick.y, text_pad->rightStick.x, text_pad->rightStick.y,
+            text_pad->analogButtons.l2, text_pad->analogButtons.r2) != 0;
         bool chord = (controller.data.buttons & (ORBIS_PAD_BUTTON_L1 | ORBIS_PAD_BUTTON_R1)) ==
             (ORBIS_PAD_BUTTON_L1 | ORBIS_PAD_BUTTON_R1);
-        bool local_action = game_input && chord && (controller.data.buttons &
+        bool local_action = game_input && !text_capture && chord && (controller.data.buttons &
             (ORBIS_PAD_BUTTON_OPTIONS | ORBIS_PAD_BUTTON_CIRCLE | ORBIS_PAD_BUTTON_SQUARE));
-        bool guide_action = game_input && chord && (controller.data.buttons & ORBIS_PAD_BUTTON_TOUCH_PAD);
-        bool diagnostic_action = game_input && chord &&
+        bool guide_action = game_input && !text_capture && chord && (controller.data.buttons & ORBIS_PAD_BUTTON_TOUCH_PAD);
+        bool diagnostic_action = game_input && !text_capture && chord &&
             (controller.data.buttons & ORBIS_PAD_BUTTON_TRIANGLE);
         bool psbox_menu_capture = false;
 #if X4_PSBOX_UI
         enum X4PsboxMenuAction psbox_menu_action = X4_PSB_MENU_NONE;
-        if (psbox && game_input) {
+        if (psbox && game_input && !text_capture) {
             bool was_open = x4_psbox_menu_open(psbox) != 0;
             bool toggle = live_status.video_ready && !chord &&
                 (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS);
@@ -276,13 +348,13 @@ reopen_interface:;
 #endif
         X4GamepadFrame gamepad = {0};
         if (game_input) x4_controller_gamepad(&controller, &gamepad);
-        if (local_action || guide_action || diagnostic_action || psbox_menu_capture) {
+        if (local_action || guide_action || diagnostic_action || psbox_menu_capture || text_capture) {
             memset(&gamepad, 0, sizeof(gamepad));
             gamepad.connected = controller.data.connected;
             if (guide_action && !local_action && !diagnostic_action) gamepad.buttons = X4_GAMEPAD_NEXUS;
         }
 #if X4_PSBOX_UI
-        if (game_input && psbox_guide_until_us > input_at) {
+        if (game_input && !text_capture && psbox_guide_until_us > input_at) {
             memset(&gamepad, 0, sizeof(gamepad));
             gamepad.buttons = X4_GAMEPAD_NEXUS;
             gamepad.connected = controller.data.connected;
@@ -503,6 +575,11 @@ reopen_interface:;
                 if (!(chord && (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS))) {
                     X4PsboxPad pad = psbox_pad(&controller, input_at);
                     X4PsboxEvent event = x4_psbox_handle(psbox, &pad);
+                    if (psbox_backend && !x4_psbox_settings_open(psbox)) {
+                        int locale_changed = x4_psbox_backend_set_language(psbox_backend, x4_psbox_language(psbox));
+                        if (locale_changed == 1 && catalog.state == X4_CATALOG_READY)
+                            (void)x4_psbox_set_catalog(psbox, &catalog);
+                    }
                     switch (event.action) {
                     case X4_PSB_ACTION_SIGN_IN:
                         psbox_auto_restore_paused = 0;
@@ -779,9 +856,10 @@ reopen_interface:;
         /* Runs before the idle continue too: a repeated/status-only refresh
          * must not conceal a gap in actual NEW live completions. */
         x4_trace_poll(live_trace);
-        int next_overlay_key[11] = {screen.page, live_muted, live_status.audio_error,
+        int next_overlay_key[13] = {screen.page, live_muted, live_status.audio_error,
             live_status.audio_playing, session.input_error, session.input_ready,
-            session.rtc_connected, session.state, screen.exit_error, controller.data.connected, chord};
+            session.rtc_connected, session.state, screen.exit_error, controller.data.connected, chord,
+            game_text.active, (int)text_revision};
         uint64_t draw_at = sceKernelGetProcessTime();
         bool overlay_changed = memcmp(overlay_key, next_overlay_key, sizeof(overlay_key)) != 0;
         if (live_visible && live_presented && !overlay_changed && draw_at - overlay_at < 500000 &&
@@ -814,12 +892,12 @@ reopen_interface:;
             if (drew_live) {
 #if X4_PSBOX_UI
                 if (psbox) {
-                    x4_live_overlay(&live_status, &session, live_muted, 0, live_pixels);
+                    x4_live_overlay(&live_status, &session, live_muted, 0, live_pixels, x4_psbox_language(psbox));
                     (void)x4_psbox_menu_composite(psbox, live_pixels,
                         (size_t)X4_WIDTH * X4_HEIGHT, &psbox_stream_info);
                 } else
 #endif
-                    x4_live_overlay(&live_status, &session, live_muted, chord, live_pixels);
+                    x4_live_overlay(&live_status, &session, live_muted, chord, live_pixels, 2);
             }
             else {
 #if X4_PSBOX_UI
@@ -853,8 +931,16 @@ reopen_interface:;
                 }
             }
         }
-        else if (screen.page == 4 || closing)
-            x4_auth_draw(&account, x4_auth_busy(auth), closing, x4_display_pixels(&display));
+        else if (screen.page == 4 || closing) {
+#if X4_PSBOX_UI
+            if (psbox && closing) {
+                x4_psbox_show_closing(psbox);
+                (void)x4_psbox_render(psbox, x4_display_pixels(&display),
+                    (size_t)X4_WIDTH * X4_HEIGHT, draw_at / 1000);
+            } else
+#endif
+                x4_auth_draw(&account, x4_auth_busy(auth), closing, x4_display_pixels(&display));
+        }
         else if (screen.page == 5) {
 #if X4_PSBOX_UI
             if (psbox && !closing)
@@ -864,7 +950,19 @@ reopen_interface:;
 #endif
                 x4_catalog_draw(&catalog, &catalog_browser, x4_auth_busy(auth), x4_display_pixels(&display));
         }
-        x4_exit_error_draw(screen.exit_error, drew_live ? live_pixels : display_pixels);
+        if (game_text.active) {
+#if X4_PSBOX_UI
+            if (psbox) (void)x4_psbox_game_text_composite(psbox, &game_text,
+                x4_display_pixels(&display), (size_t)X4_WIDTH * X4_HEIGHT, text_revision, text_terminal);
+            else
+#endif
+                x4_game_text_draw(&game_text, x4_display_pixels(&display));
+        }
+        int display_language = 2;
+#if X4_PSBOX_UI
+        if (psbox) display_language = x4_psbox_language(psbox);
+#endif
+        x4_exit_error_draw(screen.exit_error, drew_live ? live_pixels : display_pixels, display_language);
 #if X4_DEV_CONTROL
         x4_dev_control_capture(&dev_control, closing ? -1 : screen.page,
             x4_display_pixels(&display));
@@ -907,6 +1005,7 @@ reopen_interface:;
     /* A display failure can break the loop early: cancel then join before
      * cleaning the UI. Ordinary OPTIONS keeps rendering while it cancels. */
     trace_inactive(live);
+    x4_game_text_close(&game_text);
     x4_auth_cancel(auth);
 #if X4_RUMBLE
     if(controller.handle>=0) {
