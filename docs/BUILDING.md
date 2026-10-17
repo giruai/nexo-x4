@@ -35,12 +35,12 @@ The archive is verified against `dependencies.lock.json` before extraction. The 
 ## Build with existing inputs
 
 ```sh
-export OO_PS4_TOOLCHAIN="$PWD/.local/toolchain/PS4Toolchain"
+export OO_PS4_TOOLCHAIN="$PWD/.local/toolchain/OpenOrbis/PS4Toolchain"
 export X4_WEBRTC_ROOT="$PWD/.local/deps"
 export X4_WEBRTC_PREFIX="$X4_WEBRTC_ROOT/prefix"
 export X4_RUNTIME_MODULES="$PWD/.local/runtime"
 
-SOURCE_ARCHIVE="$PWD/.local/Nexo-X4-v0.1.0-dependency-sources.tar.gz" \
+SOURCE_ARCHIVE="$PWD/.local/downloads/Nexo-X4-v0.1.0-dependency-sources.tar.gz" \
   ./scripts/build-deps.sh
 ./scripts/test-host.sh
 ./scripts/build.sh
