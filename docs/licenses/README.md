@@ -21,6 +21,6 @@ The general [OpenOrbis GPL-3.0 text](OpenOrbis-GPL-3.0.txt) and LLVM [libc++](LL
 
 The [PSBox](PSBox-GPL-3.0.txt), [Inter](Inter-OFL.txt), [zlib](zlib-LICENSE.txt), [Project Nayuki QR generator](qrcodegen-MIT.txt), [stb_truetype](stb_truetype-LICENSE.txt), [stb_image](stb_image-LICENSE.txt), [stb_image_resize2](stb_image_resize2-LICENSE.txt), and [OpenGNM example](OpenGNM-examples-MIT.txt) notices are also retained here. Inter's OFL text accompanies the bundled fonts under `assets/psbox/fonts/OFL.txt`. Source files keep their individual copyright and SPDX notices, including PSBox files marked GPL-3.0-or-later.
 
-For component pins, use and corresponding-source distribution, see [Third-party notices](../../THIRD_PARTY_NOTICES.md). These notices accompany the v0.1.0 package and its matching application and dependency source.
+For component pins, use and corresponding-source distribution, see [Third-party notices](../../THIRD_PARTY_NOTICES.md). These notices accompany each release package and its corresponding application and dependency source bundles.
 
 SDK-provided static C/compiler runtime notices: [musl COPYRIGHT](musl-COPYRIGHT.txt) and [LLVM compiler-rt](LLVM-compiler-rt-LICENSE.TXT). Their provenance limits are explained in [Third-party notices](../../THIRD_PARTY_NOTICES.md).
