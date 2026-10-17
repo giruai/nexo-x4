@@ -6,6 +6,7 @@
 #include "ui/input_mode.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 
 namespace xc::ui {
@@ -21,8 +22,10 @@ constexpr Color kGreen = rgba(16, 124, 16);
 constexpr Color kWarnColor = rgba(255, 176, 32);  // the connection warning
 
 // Left to right on the resolution row: SettingsChoice::resolution values.
+#ifndef X4_OPENORBIS
 constexpr int kResolutionOrder[] = {1, 0, 2};
 const char* resolutionName(int r) { return r == 1 ? "720p" : r == 2 ? tr(Str::ResBest) : "1080p"; }
+#endif
 
 std::string fmt(const char* f, double v) {
     char b[32];
@@ -30,7 +33,28 @@ std::string fmt(const char* f, double v) {
     return b;
 }
 
+#ifdef X4_OPENORBIS
+// These PS4-only labels live here so the upstream menu's translation table stays intact.
+const char* ps4Label(int item) {
+    static constexpr const char* labels[6][3] = {
+        {"Stream quality", "Diagnostics", "Video quality: next session"},
+        {"Qualidade do vídeo", "Diagnóstico", "Qualidade do vídeo: próxima sessão"},
+        {"Calidad de video", "Diagnóstico", "Calidad de video: próxima sesión"},
+        {"Qualité vidéo", "Diagnostic", "Qualité vidéo : prochaine session"},
+        {"Videoqualität", "Diagnose", "Videoqualität: nächste Sitzung"},
+        {"Qualità video", "Diagnostica", "Qualità video: prossima sessione"},
+    };
+    int lang = std::clamp(static_cast<int>(language()), 0, 5);
+    return labels[lang][item];
+}
+#endif
+
 }  // namespace
+
+void StreamMenu::setPlaybackOptions(int profile, bool diagnostics) {
+    playbackProfile_ = std::clamp(profile, 0, 1);
+    diagnosticsOn_ = diagnostics;
+}
 
 void StreamMenu::setProfileValues(int resolution, int sharpness, int deband, int upscaler,
                                   int triggerStrength, int deadzone, bool circleConfirms,
@@ -62,6 +86,7 @@ void StreamMenu::open(int resolution, bool stats, int sharpness, int deband, int
     micLevel_ = micLevel;
     micMuted_ = micMuted;
     selected_ = XboxButton;
+    ps4Selected_ = 0;
     resolution_ = applied_ = resolution;
     resolutionAsked_ = false;
 }
@@ -71,20 +96,26 @@ MenuAction StreamMenu::handle(const NavInput& in) {
 #ifdef X4_OPENORBIS
     // PS4 exposes only controls backed by the native X4 session. The source
     // menu's resolution, image filters, profiles, gyro and mic are not wired.
-    static constexpr Item visible[] = {XboxButton, Stats, Leave};
     if (in.back || in.options) { open_ = false; return MenuAction::Close; }
-    int pos = 0;
-    for (int i = 0; i < 3; ++i) if (visible[i] == selected_) pos = i;
-    if (in.up) selected_ = visible[(pos + 2) % 3];
-    if (in.down) selected_ = visible[(pos + 1) % 3];
-    if ((in.left || in.right) && selected_ == Stats) {
-        stats_ = !stats_; return MenuAction::Stats;
+    constexpr int kPs4Items = 5;  // Xbox, quality, diagnostics, stats, leave.
+    if (in.up) ps4Selected_ = (ps4Selected_ + kPs4Items - 1) % kPs4Items;
+    if (in.down) ps4Selected_ = (ps4Selected_ + 1) % kPs4Items;
+    if (!(in.left || in.right || in.accept)) return MenuAction::None;
+    if (ps4Selected_ == 1) {
+        playbackProfile_ = 1 - playbackProfile_;
+        return MenuAction::ProfileChanged;
+    }
+    if (ps4Selected_ == 2) {
+        diagnosticsOn_ = !diagnosticsOn_;
+        return MenuAction::DiagnosticsChanged;
+    }
+    if (ps4Selected_ == 3) {
+        stats_ = !stats_;
+        return MenuAction::Stats;
     }
     if (!in.accept) return MenuAction::None;
-    if (selected_ == XboxButton) { open_ = false; return MenuAction::XboxButton; }
-    if (selected_ == Stats) { stats_ = !stats_; return MenuAction::Stats; }
     open_ = false;
-    return MenuAction::Leave;
+    return ps4Selected_ == 0 ? MenuAction::XboxButton : MenuAction::Leave;
 #else
     if (in.back || in.options) {
         open_ = false;
@@ -163,48 +194,66 @@ MenuAction StreamMenu::handle(const NavInput& in) {
 #endif
 }
 
-Canvas StreamMenu::renderMenu(const StreamInfo& info) const {
+const Canvas& StreamMenu::renderMenu(const StreamInfo& info) const {
 #ifdef X4_OPENORBIS
-    Canvas c(kMenuW, kMenuH);
+    const std::string none = "-";
+    const std::array<std::string, 6> values = {
+        info.region.empty() ? none : info.region,
+        info.rttMs >= 0 ? std::to_string(info.rttMs) + " ms" : none,
+        info.mbps > 0 ? fmt("%.1f Mbps", info.mbps) : none,
+        info.fps > 0 ? fmt("%.0f fps", info.fps) : none,
+        info.lossPct >= 0 ? fmt("%.1f %%", info.lossPct) : none,
+        info.decodeMs > 0 ? fmt("%.1f ms", info.decodeMs) : none,
+    };
+    std::string key = std::to_string(static_cast<int>(language())) + ':' +
+                      std::to_string(ps4Selected_) + ':' + std::to_string(playbackProfile_) + ':' +
+                      std::to_string(diagnosticsOn_) + ':' + std::to_string(stats_);
+    for (const auto& value : values) { key += '\x1f'; key += value; }
+    if (menuCache_ && key == menuKey_) return *menuCache_;
+    if (!menuCache_) menuCache_ = std::make_unique<Canvas>(kMenuW, kMenuH);
+    menuKey_ = std::move(key);
+    Canvas& c = *menuCache_;
     c.clear(kPanel);
     c.fillRect({0, 0, kMenuW, 6}, kGreen);
     fonts_.bold.draw(c, tr(Str::MenuTitle), 40, 38, 32, kWhite);
-    static constexpr Item visible[] = {XboxButton, Stats, Leave};
-    for (int pos = 0; pos < 3; ++pos) {
-        Item item = visible[pos];
+    for (int pos = 0; pos < 5; ++pos) {
         Rect row{24, 96 + pos * 58, kMenuW - 48, 48};
-        bool focused = item == selected_;
+        bool focused = pos == ps4Selected_;
         if (focused) c.fillRect(row, kWhite, 8);
         Color ink = focused ? kDark : kWhite;
-        const char* label = item == XboxButton ? tr(Str::MenuXboxButton) :
-                            item == Stats ? tr(Str::MenuStats) : tr(Str::MenuLeave);
+        const char* label = pos == 0 ? tr(Str::MenuXboxButton) :
+                            pos == 1 ? ps4Label(0) : pos == 2 ? ps4Label(1) :
+                            pos == 3 ? tr(Str::MenuStats) : tr(Str::MenuLeave);
         fonts_.semibold.draw(c, label, row.x + 16, fonts_.semibold.centeredY(row.y, row.h, 22), 22, ink);
-        if (item == Stats) {
-            const char* value = tr(stats_ ? Str::On : Str::Off);
+        if (pos >= 1 && pos <= 3) {
+            const char* value = pos == 1 ? (playbackProfile_ ? "1080p (experimental)" : "720p") :
+                                tr((pos == 2 ? diagnosticsOn_ : stats_) ? Str::On : Str::Off);
             int w = fonts_.semibold.measure(value, 20);
             fonts_.semibold.draw(c, value, row.x + row.w - 16 - w,
                 fonts_.semibold.centeredY(row.y, row.h, 20), 20, focused ? kDark : kGray);
         }
     }
-    c.fillRect({40, 292, kMenuW - 80, 2}, rgba(60, 60, 60));
-    int y = 322;
+    fonts_.regular.draw(c, ps4Label(2), 40, 394, 17, kDim);
+    c.fillRect({40, 428, kMenuW - 80, 2}, rgba(60, 60, 60));
+    int y = 448;
     auto line = [&](Str label, const std::string& value) {
         fonts_.regular.draw(c, tr(label), 40, y, 19, kGray);
         int w = fonts_.semibold.measure(value, 19);
         fonts_.semibold.draw(c, value, kMenuW - 40 - w, y, 19, kWhite);
-        y += 40;
+        y += 34;
     };
-    const std::string none = "-";
-    line(Str::StatRegion, info.region.empty() ? none : info.region);
-    line(Str::StatLatency, info.rttMs >= 0 ? std::to_string(info.rttMs) + " ms" : none);
-    line(Str::StatBitrate, info.mbps > 0 ? fmt("%.1f Mbps", info.mbps) : none);
-    line(Str::StatFrameRate, info.fps > 0 ? fmt("%.0f fps", info.fps) : none);
-    line(Str::StatLoss, info.lossPct >= 0 ? fmt("%.1f %%", info.lossPct) : none);
-    line(Str::StatDecode, info.decodeMs > 0 ? fmt("%.1f ms", info.decodeMs) : none);
+    line(Str::StatRegion, values[0]);
+    line(Str::StatLatency, values[1]);
+    line(Str::StatBitrate, values[2]);
+    line(Str::StatFrameRate, values[3]);
+    line(Str::StatLoss, values[4]);
+    line(Str::StatDecode, values[5]);
     fonts_.regular.draw(c, tr(Str::Back), 40, kMenuH - 46, 19, kGray);
     return c;
 #else
-    Canvas c(kMenuW, kMenuH);
+    // The non-PS4 menu includes a live microphone meter; keep that layer live.
+    if (!menuCache_) menuCache_ = std::make_unique<Canvas>(kMenuW, kMenuH);
+    Canvas& c = *menuCache_;
     c.clear(kPanel);
     c.fillRect({0, 0, kMenuW, 6}, kGreen);
     constexpr int kPad = 40;
@@ -418,7 +467,7 @@ Canvas StreamMenu::renderMenu(const StreamInfo& info) const {
 #endif
 }
 
-Canvas StreamMenu::renderStats(const StreamInfo& info) const {
+const Canvas& StreamMenu::renderStats(const StreamInfo& info) const {
     std::string text;
     if (info.height > 0) text += std::to_string(info.height) + "p  ";
     text += (info.fps > 0 ? fmt("%.0f fps", info.fps) : "- fps");
@@ -431,20 +480,29 @@ Canvas StreamMenu::renderStats(const StreamInfo& info) const {
 #endif
     constexpr int kPx = 20, kH = 36;
     std::string warn = info.degraded ? std::string("  ") + tr(Str::ConnectionUnstable) : std::string();
+    std::string key = text + '\x1f' + warn;
+    if (statsCache_ && key == statsKey_) return *statsCache_;
     int tw = fonts_.semibold.measure(text, kPx);
     int w = tw + fonts_.semibold.measure(warn, kPx) + 28;
-    Canvas c(w, kH);
+    if (!statsCache_ || statsCache_->width() != w)
+        statsCache_ = std::make_unique<Canvas>(w, kH);
+    statsKey_ = std::move(key);
+    Canvas& c = *statsCache_;
     c.clear(kPanel);
     fonts_.semibold.draw(c, text, 14, fonts_.semibold.centeredY(0, kH, kPx), kPx, kWhite);
     if (!warn.empty()) fonts_.semibold.draw(c, warn, 14 + tw, fonts_.semibold.centeredY(0, kH, kPx), kPx, kWarnColor);
     return c;
 }
 
-Canvas StreamMenu::renderWarning() const {
-    const char* text = tr(Str::ConnectionUnstable);
+const Canvas& StreamMenu::renderWarning() const {
+    const std::string text = tr(Str::ConnectionUnstable);
+    if (warningCache_ && text == warningKey_) return *warningCache_;
     constexpr int kPx = 20, kH = 36, kDot = 6;
     int w = fonts_.semibold.measure(text, kPx) + 28 + 2 * kDot + 10;
-    Canvas c(w, kH);
+    if (!warningCache_ || warningCache_->width() != w)
+        warningCache_ = std::make_unique<Canvas>(w, kH);
+    warningKey_ = text;
+    Canvas& c = *warningCache_;
     c.clear(kPanel);
     c.fillCircle(14.0f + kDot, kH / 2.0f, static_cast<float>(kDot), kWarnColor);
     fonts_.semibold.draw(c, text, 14 + 2 * kDot + 10, fonts_.semibold.centeredY(0, kH, kPx), kPx, kWhite);

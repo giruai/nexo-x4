@@ -1,3 +1,4 @@
+#include "../streaming/stream_profile.h"
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_h264.h"
 #include "videodec2_abi.h"
@@ -61,6 +62,7 @@ struct VideoState {
     int32_t (*Decode)(void *, const OrbisVideodec2InputData *, OrbisVideodec2FrameBuffer *, OrbisVideodec2OutputInfo *);
     int32_t (*Flush)(void *, OrbisVideodec2FrameBuffer *, OrbisVideodec2OutputInfo *);
     void *queue, *decoder;
+    unsigned max_width, max_height;
     Memory compute, cpu, gpu, shared, input[INPUT_RING], output[RING];
     size_t frame_size;
     unsigned input_slot, slot;
@@ -206,14 +208,18 @@ int x4_live_video_stop(X4LiveVideo *v)
 
 int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
 {
-    if (!v || !pixels || pixel_capacity < (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT) return -7;
+    if (!v || !pixels || !x4_stream_profile_valid(v->stream_profile)) return -7;
+    X4StreamProfile profile = x4_stream_profile_get(v->stream_profile);
+    if (pixel_capacity < (size_t)profile.width * profile.height) return -7;
     if (v->state) { int rc = x4_live_video_stop(v); if (rc < 0) return rc; }
     /* Diagnostic identity is session-scoped, unlike the restarted decoder's
      * ordinary counters. The pointer stays alive through helper/owner joins. */
     X4Trace *trace = v->trace;
     uint64_t decode_id = v->trace_decode_next, output_id = v->trace_output_next;
     uint64_t copy_id = v->trace_copy_next, epoch = v->trace_decoder_epoch + 1;
+    int stream_profile = v->stream_profile;
     memset(v, 0, sizeof(*v));
+    v->stream_profile = stream_profile;
     v->trace = trace; v->trace_decode_next = decode_id; v->trace_output_next = output_id;
     v->trace_copy_next = copy_id; v->trace_decoder_epoch = epoch;
     x4_trace_record(trace, VT_START, 0, epoch, 0);
@@ -227,6 +233,7 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
         atomic_init(&helper->completed, 0);
     }
     v->state = s;
+    s->max_width = profile.width; s->max_height = profile.height;
     s->trace = trace;
     int handle = x4_module_open("libSceVideodec2"), rc = handle;
     if (stage(v, "MODULO H264", rc) < 0) goto fail;
@@ -252,8 +259,8 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     if (stage(v, "CREAR COLA", rc) < 0) goto fail;
     OrbisVideodec2DecoderConfigInfo config = {
         .thisSize = sizeof(config), .resourceType = 1, .codecType = 1,
-        .profile = 66, .maxLevel = 31, .maxFrameWidth = X4_LIVE_WIDTH,
-        .maxFrameHeight = X4_LIVE_HEIGHT, .maxDpbFrameCount = 4,
+        .profile = 66, .maxLevel = profile.h264_level, .maxFrameWidth = profile.width,
+        .maxFrameHeight = profile.height, .maxDpbFrameCount = 4,
         .decodePipelineDepth = 1, .computeQueue = s->queue,
         .cpuAffinityMask = 0x3f, .cpuThreadPriority = 700,
         .optimizeProgressiveVideo = true, .checkMemoryType = false
@@ -332,7 +339,9 @@ fail:
 
 int x4_live_video_set_target(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
 {
-    if (!v || !v->state || !pixels || pixel_capacity < (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT) return -7;
+    if (!v || !v->state || !pixels) return -7;
+    VideoState *s = v->state;
+    if (pixel_capacity < (size_t)s->max_width * s->max_height) return -7;
     v->pixels = pixels;
     return 0;
 }
@@ -717,8 +726,8 @@ static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o, un
     *reason = 0;
     if (o->isErrorFrame) { *reason = 1; return -7; }
     if (!o->isValid) return 0;
-    if (o->codecType != 1 || !o->frameWidth || o->frameWidth > X4_LIVE_WIDTH || (o->frameWidth & 1) ||
-        !o->frameHeight || o->frameHeight > X4_LIVE_HEIGHT || (o->frameHeight & 1) || o->framePitch < o->frameWidth || o->framePitch > 8192) { *reason = 2; return -7; }
+    if (o->codecType != 1 || !o->frameWidth || o->frameWidth > s->max_width || (o->frameWidth & 1) ||
+        !o->frameHeight || o->frameHeight > s->max_height || (o->frameHeight & 1) || o->framePitch < o->frameWidth || o->framePitch > 8192) { *reason = 2; return -7; }
     size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
     if (length > o->frameBufferSize || length > s->staging_size || !s->staging || ((uintptr_t)o->pFrameBuffer & 15)) { *reason = 3; return -7; }
     int owned = 0;

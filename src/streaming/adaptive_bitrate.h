@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include "stream_profile.h"
 
 enum {
     X4_ABR_MIN_KBPS = 3000,
@@ -65,19 +66,28 @@ typedef struct {
     uint64_t warmup_start_us, last_sample_us, clean_since_us, last_reduce_us;
     uint64_t next_send_us;
     uint32_t desired_kbps, sent_kbps, pending_kbps;
+    uint32_t min_kbps, max_kbps;
     uint16_t sampled_packets;
     uint8_t sampled_windows, loss_streak, send_attempts;
     bool have_snapshot, clean_active, has_reduced, send_pending;
 } X4AdaptiveBitrate;
 
-static inline void x4_abr_init(X4AdaptiveBitrate *p, uint64_t now_us)
+static inline void x4_abr_init_profile(X4AdaptiveBitrate *p, uint64_t now_us, int profile)
 {
     if (!p) return;
     memset(p, 0, sizeof(*p));
     p->warmup_start_us = now_us;
-    p->desired_kbps = X4_ABR_START_KBPS;
+    X4StreamProfile config = x4_stream_profile_get(profile);
+    p->min_kbps = config.min_kbps;
+    p->max_kbps = config.max_kbps;
+    p->desired_kbps = config.max_kbps;
     /* Startup JSON announces a cap; it is not a local RTC rate request. */
     p->sent_kbps = 0;
+}
+
+static inline void x4_abr_init(X4AdaptiveBitrate *p, uint64_t now_us)
+{
+    x4_abr_init_profile(p, now_us, X4_STREAM_720);
 }
 
 static inline bool x4_abr_counters_regressed(const X4AbrSnapshot *now,
@@ -172,19 +182,19 @@ static inline X4AbrDecision x4_abr_update(X4AdaptiveBitrate *p, uint64_t now_us,
     if (burst || (loss && p->loss_streak >= 2)) {
         if (p->has_reduced && now_us - p->last_reduce_us < X4_ABR_HOLD_DOWN_US)
             d.reason = X4_ABR_HOLD_DOWN;
-        else if (p->desired_kbps > X4_ABR_MIN_KBPS) {
+        else if (p->desired_kbps > p->min_kbps) {
             uint32_t reduced = p->desired_kbps * 4u / 5u;
-            p->desired_kbps = reduced < X4_ABR_MIN_KBPS ? X4_ABR_MIN_KBPS : reduced;
+            p->desired_kbps = reduced < p->min_kbps ? p->min_kbps : reduced;
             p->last_reduce_us = now_us;
             p->has_reduced = true;
             p->clean_active = false;
             d.reason = burst ? X4_ABR_LOSS_BURST : X4_ABR_LOSS_SUSTAINED;
         }
-    } else if (clean && p->clean_active && p->desired_kbps < X4_ABR_MAX_KBPS &&
+    } else if (clean && p->clean_active && p->desired_kbps < p->max_kbps &&
         now_us - p->clean_since_us >= X4_ABR_RECOVERY_US &&
         (!p->has_reduced || now_us - p->last_reduce_us >= X4_ABR_HOLD_DOWN_US)) {
         uint32_t raised = p->desired_kbps + X4_ABR_RAISE_KBPS;
-        p->desired_kbps = raised > X4_ABR_MAX_KBPS ? X4_ABR_MAX_KBPS : raised;
+        p->desired_kbps = raised > p->max_kbps ? p->max_kbps : raised;
         p->clean_since_us = now_us;
         d.reason = X4_ABR_CLEAN_RECOVERY;
     }

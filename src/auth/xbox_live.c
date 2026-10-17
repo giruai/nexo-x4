@@ -35,7 +35,8 @@
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
  * (0.6.2) followed by real RTC signaling (0.7.0). Timings in monotonic usec. */
 #define X4_SESSION_USEC 1000000ull
-#define X4_SESSION_PROVISION_USEC (360ull * X4_SESSION_USEC)
+/* Keep the cancellable resource queue separate from per-request timeouts. */
+#define X4_SESSION_PROVISION_USEC (1800ull * X4_SESSION_USEC)
 #define X4_SESSION_NEGOTIATE_USEC (90ull * X4_SESSION_USEC)
 #define X4_SESSION_KEEPALIVE_USEC (30ull * X4_SESSION_USEC)
 #define X4_SESSION_ICE_POLL_USEC X4_SESSION_USEC
@@ -47,6 +48,7 @@
 #define X4_SESSION_MID_MAX 32u
 #define X4_SESSION_CANDIDATES_MAX 128u
 #define X4_SESSION_POLL_USEC (2ull * X4_SESSION_USEC)
+#define X4_QUEUE_REFRESH_USEC (30ull * X4_SESSION_USEC)
 #define X4_SESSION_STEP_USEC 100000u
 #define X4_SESSION_ID_MAX 128u
 #define X4_SESSION_PREFIX "v5/sessions/cloud/"
@@ -80,6 +82,10 @@ struct X4XboxWork {
      * /connect body was built. */
     char passport[X4_XBOX_TOKEN_SIZE];
     X4Http *http;
+    X4Http *queue_http; /* Isolated: optional failures cannot quarantine /state. */
+    bool queue_disabled;
+    uint64_t next_queue_query_us;
+    char queue_title_id[96];
     const _Atomic int *cancel;
     X4XboxProgress progress;
     void *context;
@@ -89,6 +95,7 @@ struct X4XboxWork {
     X4XboxPassport passport_provider;
     void *passport_context;
     X4SessionSnapshot session;
+    int stream_profile; /* Set before the single session run starts. */
     uint64_t session_start;
     X4Rtc *rtc;
     X4SessionMediaCallback media_callback;
@@ -121,6 +128,11 @@ X4XboxWork *x4_xbox_work_new(void)
     X4XboxWork *w = malloc(sizeof(*w));
     if (w) memset(w, 0, sizeof(*w));
     return w;
+}
+
+void x4_xbox_work_set_stream_profile(X4XboxWork *w, int profile)
+{
+    if (w) w->stream_profile = x4_stream_profile_valid(profile) ? profile : X4_STREAM_720;
 }
 
 void x4_xbox_work_free(X4XboxWork *w)
@@ -788,6 +800,7 @@ static int session_wait(X4XboxWork *w, uint64_t until, uint64_t deadline)
         unsigned elapsed = (unsigned)((t - w->session_start) / X4_SESSION_USEC);
         if (left != w->session.seconds_left || elapsed != w->session.elapsed_seconds) {
             w->session.seconds_left = left;
+            w->session.elapsed_seconds = elapsed;
             session_publish(w);
         }
         sceKernelUsleep(X4_SESSION_STEP_USEC);
@@ -884,6 +897,64 @@ static enum X4SessionState remote_state(const char *state, const char **stage)
     else if (!strcmp(state, "WaitingForResources")) *stage = "esperando recursos de Xbox";
     else *stage = "esperando respuesta de Xbox";
     return X4_SESSION_WAITING;
+}
+
+static enum X4RemoteQueueState remote_queue_state(const char *state)
+{
+    if (!strcmp(state, "WaitingForResources")) return X4_REMOTE_WAITING_FOR_RESOURCES;
+    if (!strcmp(state, "Provisioning")) return X4_REMOTE_PROVISIONING;
+    if (!strcmp(state, "ReadyToConnect")) return X4_REMOTE_READY_TO_CONNECT;
+    if (!strcmp(state, "Provisioned")) return X4_REMOTE_PROVISIONED;
+    if (!strcmp(state, "Failed") || !strcmp(state, "Error")) return X4_REMOTE_FAILED;
+    return X4_REMOTE_UNKNOWN;
+}
+
+/* Optional title/region estimate. Never mutates the real session state or
+ * its HTTP context. A 3 s request deadline limits interference with /state;
+ * context creation/cleanup are native calls and are not covered by it. */
+static void session_queue_estimate(X4XboxWork *w, uint64_t now, uint64_t deadline)
+{
+    if (w->queue_disabled || !x4_queue_refresh_due(true, now, w->next_queue_query_us) ||
+        atomic_load(w->cancel) || deadline <= now ||
+        deadline - now <= 3ull * X4_SESSION_USEC) return;
+    w->next_queue_query_us = now > UINT64_MAX - X4_QUEUE_REFRESH_USEC ?
+        UINT64_MAX : now + X4_QUEUE_REFRESH_USEC;
+    X4QueueEstimate *estimate = &w->session.queue_estimate;
+    if (estimate->query_count < UINT32_MAX) ++estimate->query_count;
+    if (!x4_queue_waittime_url(w->origin, w->queue_title_id, w->url, sizeof(w->url))) {
+        estimate->result = X4_QUEUE_ERROR;
+        w->queue_disabled = true;
+        session_publish(w);
+        return;
+    }
+    if (!w->queue_http) {
+        int open_error = 0;
+        w->queue_http = x4_http_open(&open_error);
+        if (!w->queue_http) {
+            estimate->result = X4_QUEUE_ERROR;
+            w->queue_disabled = true;
+            session_publish(w);
+            return;
+        }
+    }
+    const X4HttpHeader headers[] = {
+        {"Authorization", w->authorization},
+        {"x-gssv-client", "XboxComBrowser"},
+        {"X-MS-Device-Info", X4_XBOX_DEVICE_INFO},
+    };
+    size_t length = 0;
+    int status = 0;
+    int rc = x4_http_waittime_request(w->queue_http, w->url, headers,
+        sizeof(headers) / sizeof(headers[0]), w->response, 8193,
+        &length, &status, w->cancel);
+    if (rc) x4_queue_estimate_parse(NULL, 0, 0, estimate);
+    else x4_queue_estimate_parse(w->response, length, status, estimate);
+    if (rc == 0 && status == 200 && estimate->result == X4_QUEUE_AVAILABLE)
+        estimate->updated_elapsed_seconds =
+            (unsigned)((session_now() - w->session_start) / X4_SESSION_USEC);
+    x4_secure_clear(w->response, 8193);
+    if (!x4_http_can_retry(w->queue_http)) w->queue_disabled = true;
+    session_publish(w);
 }
 
 /* Failed authentication step recorded in w->result. No remote session
@@ -1008,9 +1079,16 @@ static bool session_provision(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
         }
         const char *stage = NULL;
         enum X4SessionState next_state = remote_state(state, &stage);
+        enum X4RemoteQueueState queue_state = remote_queue_state(state);
         bool provisioned = !strcmp(state, "Provisioned");
         x4_secure_clear(state, sizeof(state));
         w->session.http_status = status;
+        w->session.remote_state = queue_state;
+        if (w->session.state_poll_count < UINT32_MAX) ++w->session.state_poll_count;
+        w->session.last_state_poll_elapsed_seconds =
+            (unsigned)((done - w->session_start) / X4_SESSION_USEC);
+        w->session.elapsed_seconds = w->session.last_state_poll_elapsed_seconds;
+        session_publish(w);
         if (next_state == X4_SESSION_ERROR) {
             end_with(end, X4_SESSION_ERROR, X4_AUTH_E_SESSION, status, stage);
             return false;
@@ -1023,6 +1101,10 @@ static bool session_provision(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
             return true;
         }
         if (strcmp(w->session.stage, stage)) session_state(w, X4_SESSION_WAITING, stage, seconds_until(deadline, done));
+        if (queue_state == X4_REMOTE_WAITING_FOR_RESOURCES)
+            session_queue_estimate(w, done, deadline);
+        /* The optional estimate must not add a fresh poll delay after its
+         * own latency. If it consumed this interval, poll /state now. */
         next = done + X4_SESSION_POLL_USEC;
     }
 }
@@ -2215,7 +2297,7 @@ static void session_stream(X4XboxWork *w, SessionEnd *end)
     if (!signal_provisioned(w, deadline, end)) return;
     deadline = session_now() + X4_SESSION_NEGOTIATE_USEC;
     w->next_keepalive = session_now();
-    w->rtc = x4_rtc_open(&rc);
+    w->rtc = x4_rtc_open_profile(w->stream_profile, &rc);
     if (!w->rtc) { end_with(end, X4_SESSION_ERROR, rc ? rc : X4_AUTH_E_SESSION, 0, "no se pudo iniciar WebRTC nativo"); return; }
     x4_rtc_set_media_callback(w->rtc, w->media_callback, w->media_user);
     x4_rtc_set_diagnostic_trace(w->rtc, w->media_trace);
@@ -2402,11 +2484,14 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
         return &w->session;
     }
     copy_text(w->session.title_name, sizeof(w->session.title_name), title->name[0] ? title->name : title->id);
+    copy_text(w->queue_title_id, sizeof(w->queue_title_id), title->id);
     int rc = 0;
     step(w, "iniciando HTTPS");
     w->http = x4_http_open(&rc);
     if (!w->http) session_end(w, X4_SESSION_ERROR, rc, 0, "inicio HTTPS (red/TLS)");
     else session_run(w, microsoft_token, title, index);
+    x4_http_close(w->queue_http);
+    w->queue_http = NULL;
     x4_http_close(w->http);
     w->http = NULL;
     x4_secure_clear(w->user_token, sizeof(w->user_token));
@@ -2417,6 +2502,7 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     x4_secure_clear(w->url, sizeof(w->url));
     x4_secure_clear(w->origin, sizeof(w->origin));
     x4_secure_clear(w->session_id, sizeof(w->session_id));
+    x4_secure_clear(w->queue_title_id, sizeof(w->queue_title_id));
     x4_secure_clear(w->passport, sizeof(w->passport));
     w->passport_provider = NULL;
     w->passport_context = NULL;

@@ -27,6 +27,7 @@ enum {
 
 typedef struct {
     X4AdaptiveBitrate policy;
+    int stream_profile;
     uint64_t report_at_us, report_bytes, report_frames, report_valid, report_lost;
     uint64_t report_local_drops, pending_deadline_us, probe_until_us;
     uint64_t next_probe_attempt_us, next_restore_attempt_us;
@@ -52,15 +53,22 @@ static inline unsigned x4_bitrate_scaled_rate(uint64_t count, uint64_t scale,
     return value > UINT32_MAX ? UINT32_MAX : (unsigned)value;
 }
 
-static inline void x4_bitrate_init(X4BitrateControl *control, uint64_t now_us)
+static inline void x4_bitrate_init_profile(X4BitrateControl *control, uint64_t now_us,
+    int profile)
 {
     if (!control) return;
     memset(control, 0, sizeof(*control));
-    x4_abr_init(&control->policy, now_us);
+    control->stream_profile = x4_stream_profile_valid(profile) ? profile : X4_STREAM_720;
+    x4_abr_init_profile(&control->policy, now_us, control->stream_profile);
+}
+
+static inline void x4_bitrate_init(X4BitrateControl *control, uint64_t now_us)
+{
+    x4_bitrate_init_profile(control, now_us, X4_STREAM_720);
 }
 
 /* 4000/8000 force a 30-second rate probe. Zero begins an immediate, bounded
- * 8000 kbps restore, followed by a fresh automatic-policy warmup. Switching
+ * restore to the selected profile's ceiling, followed by a fresh automatic-policy warmup. Switching
  * modes invalidates the old mailbox observation; the latest request wins. */
 static inline void x4_bitrate_probe(X4BitrateControl *control, uint64_t now_us,
     unsigned kbps)
@@ -80,7 +88,7 @@ static inline void x4_bitrate_probe(X4BitrateControl *control, uint64_t now_us,
     control->restore_attempts = 0;
     control->probe_until_us = kbps ? x4_bitrate_deadline(now_us, X4_BITRATE_PROBE_US) : 0;
     control->reason = kbps ? X4_BITRATE_REASON_PROBE : X4_BITRATE_REASON_RESTORE;
-    x4_abr_init(&control->policy, now_us);
+    x4_abr_init_profile(&control->policy, now_us, control->stream_profile);
 }
 
 static inline bool x4_bitrate_eligible(const X4SessionSnapshot *session,
@@ -99,7 +107,7 @@ static inline void x4_bitrate_finish_pending(X4BitrateControl *control,
     if (control->pending_is_restore) {
         if (success) {
             /* This is local RTC send feedback, independent of policy warmup. */
-            control->policy.sent_kbps = X4_ABR_START_KBPS;
+            control->policy.sent_kbps = control->policy.max_kbps;
             control->restore_active = false;
             control->reason = X4_ABR_BASELINE;
         } else control->reason = X4_BITRATE_REASON_SEND_FAILED;
@@ -152,7 +160,7 @@ static inline void x4_bitrate_report(X4BitrateControl *control, uint64_t now_us,
         (unsigned)(lost <= UINT64_MAX / 10000u ? lost * 10000u / total :
             (long double)lost * 10000.0L / (long double)total) : 0;
     unsigned desired = control->probe_active ? control->probe_target_kbps :
-        control->restore_active ? X4_ABR_START_KBPS : control->policy.desired_kbps;
+        control->restore_active ? control->policy.max_kbps : control->policy.desired_kbps;
     unsigned sent = control->probe_active ? control->probe_sent_kbps :
         control->policy.sent_kbps;
     printf("[x4 bitrate] mode=%s eligible=%u desired=%u sent=%u requested=%u "
@@ -225,14 +233,14 @@ static inline void x4_bitrate_tick(X4BitrateControl *control, uint64_t now_us,
         if (!control->pending &&
             control->restore_attempts < X4_BITRATE_PROBE_MAX_ATTEMPTS &&
             now_us >= control->next_restore_attempt_us) {
-            int rc = x4_auth_request_bitrate(auth, X4_ABR_START_KBPS);
+            int rc = x4_auth_request_bitrate(auth, control->policy.max_kbps);
             ++control->restore_attempts;
             control->next_restore_attempt_us = x4_bitrate_deadline(now_us,
                 X4_ABR_RETRY_US);
             if (rc == 0) {
                 control->pending = true;
                 control->pending_is_restore = true;
-                control->pending_kbps = X4_ABR_START_KBPS;
+                control->pending_kbps = control->policy.max_kbps;
                 control->pending_serial_base = session->bitrate_feedback_serial;
                 control->pending_deadline_us = x4_bitrate_deadline(now_us,
                     X4_BITRATE_FEEDBACK_TIMEOUT_US);

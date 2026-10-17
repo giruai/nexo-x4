@@ -7,7 +7,7 @@ This guide describes the v0.1.0 (`APP_VER` `01.32`) local build. The output is `
 - A Linux x86-64 environment with Clang 18 or newer, CMake, Ninja, Python 3, `make`, `tar`, and the tools required by OpenOrbis packaging. Portable host checks compile x86-64 SSE2 code (`-msse2`). The target code uses C23 and C++17.
 - The pinned OpenOrbis PS4 Toolchain, v0.5.4, exposed through `OO_PS4_TOOLCHAIN`. `scripts/bootstrap-toolchain.sh` is an optional way to obtain and verify that pinned public toolchain; an existing installation can be used instead. The SDK is a local build input and is not committed to Git.
 - The **complete patched dependency source archive** matching this release, passed as `SOURCE_ARCHIVE` to `scripts/build-deps.sh`. It must include the pinned library trees, including zlib, applied PS4 port modifications, submodules, build configuration, overlays, source notices, and licenses. Do not substitute a bare upstream checkout for this archive.
-- OpenOrbis-built `libSceFios2.prx` and `libc.prx` in one directory exposed through `X4_RUNTIME_MODULES`. They are generated from the public OpenOrbis sources and are required at package time.
+- OpenOrbis-built `libSceFios2.prx` and `libc.prx` in one directory exposed through `X4_RUNTIME_MODULES`. They are generated from the public OpenOrbis source supplement in `vendor/openorbis-runtime` and are required at package time.
 
 On Apple Silicon, use a Linux x86-64 guest, for example an OrbStack amd64 VM under Rosetta, and run the commands inside that guest. Keep the repository and build inputs in a guest-local directory without spaces for compatibility with upstream OpenOrbis Makefiles. The ignored `.local/` directory can hold dependency source, builds, the toolchain, and runtime modules. It is not part of the distributed application source.
 
@@ -30,7 +30,7 @@ SOURCE_ARCHIVE="$PWD/.local/downloads/Nexo-X4-v0.1.0-dependency-sources.tar.gz" 
 ./scripts/build.sh
 ```
 
-The archive is verified against `dependencies.lock.json` before extraction. The toolchain bootstrap verifies the pinned official archive. The optional packager bootstrap extracts its verified legacy OpenSSL dependency into `.local/hostlibs`; it does not install it system-wide. `prepare-runtime.sh` builds public OpenOrbis auxiliary modules from the SDK sources, without reading a console.
+The archive is verified against `dependencies.lock.json` before extraction. The toolchain bootstrap verifies the pinned official archive. The optional packager bootstrap extracts its verified legacy OpenSSL dependency into `.local/hostlibs`; it does not install it system-wide. `prepare-runtime.sh` verifies the public source supplement and builds app-local copies with the pinned SDK, without reading a console or writing into shared SDK sources.
 
 ## Build with existing inputs
 
@@ -57,3 +57,7 @@ If you distribute the PKG, provide the exact corresponding Nexo X4 application s
 The optional public toolchain download is separate from the source bundle. Do not add local SDK installations, generated packages, account state, or diagnostic logs to the release source archive.
 
 The dependency source bundle retains pinned upstream test certificates, sample signing keys, and test vectors. These are already-public fixtures, are not account or console credentials, and are not packaged as client secrets.
+
+## Local 0.1.1 candidate
+
+`make` builds numeric input instrumentation with `X4_INPUT_TRACE=1` by default; its runtime switch in Options defaults off. `X4_INPUT_TRACE=0` can compile out the trigger probes. The switch does not enable diagnostic mailbox commands or capture text/account data. Build/version names come from `VERSION`, `APP_VERSION` and `src/core/build_identity.h`; keep them consistent. The 0.1.1 candidate is separate from the published 0.1.0 release and has not been validated for cloud 1080p delivery.

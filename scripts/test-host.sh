@@ -13,4 +13,19 @@ done
 .local/tests/receiver_nack_state
 "$host_cc" "${flags[@]}" -pthread -DX4_INGRESS_HOST_TEST -DX4_INGRESS_TEST_HOOKS -Isrc/media tests/video_ingress_test.c src/media/video_ingress.c -o .local/tests/video_ingress
 .local/tests/video_ingress
+"$host_cc" "${flags[@]}" tests/queue_estimate_test.c src/auth/queue_estimate.c src/auth/json.c -o .local/tests/queue_estimate
+.local/tests/queue_estimate
+host_cxx=${HOST_CXX:-clang++}
+cppflags=(-O1 -g -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer)
+"$host_cxx" "${cppflags[@]}" -msse2 tests/overlay_copy_test.cpp -o .local/tests/overlay_copy
+.local/tests/overlay_copy
+"$host_cxx" "${cppflags[@]}" tests/psbox_prefs_test.cpp src/ui/psbox/prefs.cpp -o .local/tests/psbox_prefs
+.local/tests/psbox_prefs
+"$host_cxx" "${cppflags[@]}" -DX4_OPENORBIS -Isrc/ui/psbox/vendor -isystem src/ui/psbox/vendor/extern \
+    tests/stream_menu_test.cpp src/ui/psbox/vendor/ui/stream_menu.cpp src/ui/psbox/vendor/ui/canvas.cpp \
+    src/ui/psbox/vendor/ui/font.cpp src/ui/psbox/vendor/ui/strings.cpp src/ui/psbox/vendor/ui/pad_icons.cpp \
+    -o .local/tests/stream_menu
+.local/tests/stream_menu assets/psbox/fonts
+"$host_cxx" "${cppflags[@]}" tests/queue_view_test.cpp -o .local/tests/queue_view
+.local/tests/queue_view
 printf 'Portable host checks passed. These do not emulate PS4 video hardware.\n'

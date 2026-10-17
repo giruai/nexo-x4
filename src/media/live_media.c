@@ -1,3 +1,4 @@
+#include "../streaming/stream_profile.h"
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_media.h"
 #include "video_ingress.h"
@@ -141,6 +142,8 @@ int x4_live_track_accept(X4LiveTrack *t, const X4LiveRtp *r)
 enum { RGB_SLOTS = 3, WORKER_BUDGET_US = 16000, WORKER_DECODE_LIMIT = 4 };
 typedef struct { uint32_t *pixels; unsigned width, height; uint64_t generation, completed_us, native_output; } RgbSlot;
 struct X4LiveMedia {
+    size_t rgb_capacity;
+    X4StreamProfile profile;
     X4Trace *trace;
     uint64_t trace_session;
     uint64_t trace_au_next, trace_au, trace_track_epoch, last_draw_output;
@@ -392,10 +395,16 @@ static void depacketize(X4LiveMedia *m, const X4LiveRtp *r, const X4IngressTicke
     }
 }
 X4LiveMedia *x4_live_media_create(int *error)
+{ return x4_live_media_create_profile(X4_STREAM_720, error); }
+X4LiveMedia *x4_live_media_create_profile(int profile, int *error)
 {
+    if (!x4_stream_profile_valid(profile)) { if (error) *error = X4_LIVE_ERR_MEMORY; return NULL; }
     int rc = X4_LIVE_ERR_MEMORY;
     X4LiveMedia *m = calloc(1, sizeof(*m));
     if (!m) { if (error) *error = rc; return NULL; }
+    m->profile = x4_stream_profile_get(profile);
+    m->rgb_capacity = (size_t)m->profile.width * m->profile.height;
+    m->video.stream_profile = profile;
     atomic_init(&m->keyframe, true); atomic_init(&m->ingress_gap, false);
     atomic_init(&m->packets, 0); atomic_init(&m->dropped, 0); atomic_init(&m->requests, 0);
     atomic_init(&m->received_bytes, 0);
@@ -421,7 +430,7 @@ X4LiveMedia *x4_live_media_create(int *error)
     m->au = malloc(X4_LIVE_AU_MAX); if (!m->au) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
     rc = x4_live_reorder_init(&m->reorder, 128, 32, 25000); if (rc < 0) goto fail;
     for (unsigned i = 0; i < RGB_SLOTS; ++i) {
-        m->rgb[i].pixels = calloc((size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT, sizeof(uint32_t));
+        m->rgb[i].pixels = calloc(m->rgb_capacity, sizeof(uint32_t));
         if (!m->rgb[i].pixels) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
     }
     m->trace_session = x4_trace_now_us();
@@ -432,12 +441,12 @@ X4LiveMedia *x4_live_media_create(int *error)
     /* Optional sampler owns no playback buffers. Bind before all producers;
      * queue storage is retained until its successful stop/join at close. */
     x4_trace_monitor_bind_queue(m->trace, &m->ingress);
-    X4MonitorConfig config = {.width = 1280, .height = 720, .max_fps = 60,
-        .bitrate_kbps = 8000, .readers = X4_LIVE_COPY_READERS,
+    X4MonitorConfig config = {.width = m->profile.width, .height = m->profile.height, .max_fps = m->profile.fps,
+        .bitrate_kbps = m->profile.max_kbps, .readers = X4_LIVE_COPY_READERS,
         .budget_us = WORKER_BUDGET_US, .decode_limit = WORKER_DECODE_LIMIT,
         .queue_capacity = 256, .reorder_capacity = 128, .reorder_depth = 32,
-        .reorder_wait_us = 25000, .h264_profile = 0x42e01f,
-        .max_fs = 3600, .max_mbps = 108000};
+        .reorder_wait_us = 25000, .h264_profile = 0x42e000 | m->profile.h264_level,
+        .max_fs = m->profile.max_fs, .max_mbps = m->profile.max_mbps};
     x4_trace_monitor_config(m->trace, &config);
     x4_trace_monitor_epoch(m->trace, X4_MON_ACTOR_SESSION, X4_MON_EPOCH_LOADING);
     int monitor_rc = x4_trace_monitor_start(m->trace);
@@ -935,7 +944,7 @@ static bool recover_observed_decode_error(X4LiveMedia *m, int slot)
     memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
     m->sps_size = m->pps_size = 0;
     rc = x4_live_video_start(&m->video, m->rgb[slot].pixels,
-        (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT);
+        m->rgb_capacity);
     if (rc < 0) {
         printf("Nexo X4: video decoder restart start failed rc=0x%08x\n", (unsigned)rc);
         return false;
@@ -1182,7 +1191,7 @@ static void video_batch(X4LiveMedia *m)
     if (slot < 0) return;
     m->diagnostic_worker_phase = X4_MON_PHASE_ASSEMBLE;
     x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_ASSEMBLE, 0);
-    if (x4_live_video_set_target(&m->video, m->rgb[slot].pixels, (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT) < 0) {
+    if (x4_live_video_set_target(&m->video, m->rgb[slot].pixels, m->rgb_capacity) < 0) {
         m->video.error = X4_LIVE_ERR_DECODER; finish_rgb(m, slot, false); return;
     }
     uint64_t begin = sceKernelGetProcessTime(), decode_begin = m->video.decode_calls;
@@ -1241,7 +1250,7 @@ static void video_batch(X4LiveMedia *m)
             if (locked) {
                 int rc = x4_live_video_stop(&m->video); if (rc < 0) goto finish;
                 retire_video_counters(m);
-                if (x4_live_video_start(&m->video, m->rgb[slot].pixels, (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT) < 0) goto finish;
+                if (x4_live_video_start(&m->video, m->rgb[slot].pixels, m->rgb_capacity) < 0) goto finish;
                 decode_begin = frame_begin = 0;
             }
         }
@@ -1340,7 +1349,7 @@ static void *video_worker(void *context)
     x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_STARTUP, 0);
     x4_trace_record(m->trace, MT_WORKER_START, 0, X4_LIVE_COPY_READERS, WORKER_BUDGET_US);
     x4_trace_record(m->trace, MT_WAIT_BEGIN, 0x8000u, 0, 0);
-    int rc = x4_live_video_start(&m->video, m->rgb[0].pixels, (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT);
+    int rc = x4_live_video_start(&m->video, m->rgb[0].pixels, m->rgb_capacity);
     publish_worker_view(m);
     atomic_store(&m->start_result, rc);
     atomic_store_explicit(&m->start_complete, true, memory_order_release);
@@ -1466,7 +1475,9 @@ int x4_live_media_draw(X4LiveMedia *m, uint32_t *p)
     unsigned bottom = oy + out_h;
     if (bottom < X4_HEIGHT) memset(p + (size_t)bottom * X4_WIDTH, 0,
         (size_t)(X4_HEIGHT - bottom) * X4_WIDTH * sizeof(*p));
-    if (w == 1280 && h == 720 && X4_WIDTH == 1920 && X4_HEIGHT == 1080) {
+    if (w == 1920 && h == 1080 && X4_WIDTH == 1920 && X4_HEIGHT == 1080) {
+        x4_live_copy_1080p_sse2(p, pixels, true);
+    } else if (w == 1280 && h == 720 && X4_WIDTH == 1920 && X4_HEIGHT == 1080) {
         x4_live_scale_720p_to_1080p_sse2(p, pixels, true);
     } else for (unsigned y = 0; y < out_h; ++y) {
         const uint32_t *row = pixels + m->scale_y[y];

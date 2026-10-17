@@ -30,7 +30,8 @@ typedef struct {
     double fps, mbps, loss_pct, decode_ms, on_screen_ms;
 } X4PsboxStreamInfo; /* negative measurements mean unknown */
 enum X4PsboxMenuAction { X4_PSB_MENU_NONE, X4_PSB_MENU_CLOSE,
-    X4_PSB_MENU_GUIDE, X4_PSB_MENU_LEAVE, X4_PSB_MENU_STATS };
+    X4_PSB_MENU_GUIDE, X4_PSB_MENU_LEAVE, X4_PSB_MENU_STATS,
+    X4_PSB_MENU_PROFILE, X4_PSB_MENU_DIAGNOSTICS, X4_PSB_MENU_PREFS_FAILED };
 
 enum X4PsboxAction { X4_PSB_ACTION_NONE, X4_PSB_ACTION_SIGN_IN,
     X4_PSB_ACTION_REFRESH_CATALOG, X4_PSB_ACTION_PLAY,
@@ -78,13 +79,15 @@ void x4_psbox_set_auth(X4PsboxUi *ui, const X4AuthSnapshot *auth);
 void x4_psbox_set_launch(X4PsboxUi *ui, const char *title_id, const char *status);
 void x4_psbox_set_session(X4PsboxUi *ui, const X4SessionSnapshot *session, const char *title_id);
 /* The returned event is a request for the caller; no network/session call is
- * made by this bridge. Settings mutations are reported as unsupported. */
+ * made by this bridge. Supported PS4 settings are persisted; profile changes apply next session. */
 X4PsboxEvent x4_psbox_handle(X4PsboxUi *ui, const X4PsboxPad *pad);
 /* 1920x1080 RGBA bytes in the same 0xAABBGGRR layout as X4Display. */
 int x4_psbox_render(X4PsboxUi *ui, uint32_t *pixels, size_t pixel_count, uint64_t now_ms);
 /* Menu is composed over the actual decoded live frame; unsupported PS5
  * controls are absent. Caller consumes its action and neutralizes Xbox pad
  * input while the menu is open or being toggled. */
+int x4_psbox_stream_profile(const X4PsboxUi *ui);
+int x4_psbox_diagnostics(const X4PsboxUi *ui);
 int x4_psbox_menu_open(const X4PsboxUi *ui);
 /* Whether menu, statistics or connection warning will read/blend live pixels. */
 int x4_psbox_needs_overlay(const X4PsboxUi *ui, int degraded);

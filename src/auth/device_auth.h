@@ -4,6 +4,7 @@
 #include "xbox_session.h"
 #include "../input/gamepad.h"
 #include "../input/rumble.h"
+#include "../streaming/stream_profile.h"
 
 /* Microsoft account sign-in (OAuth 2.0 device authorization grant) on one
  * background worker. AUTHORIZED only means a Microsoft token was acquired;
@@ -71,6 +72,10 @@ typedef struct {
 /* Public operations belong to main except the synchronized input source and
  * cancel/keyframe-request flags. */
 X4Auth *x4_auth_create(void);
+/* Main thread only, before starting a session. Returns BUSY while any auth
+ * worker runs; the selected profile is copied into each session worker. */
+int x4_auth_set_stream_profile(X4Auth *auth, int profile);
+int x4_auth_stream_profile(const X4Auth *auth);
 /* Main thread only, while no worker is busy. Registration persists across
  * sign-ins. A completed worker is joined before replacing the registration;
  * a join error preserves the old registration. The receiver context must

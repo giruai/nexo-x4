@@ -1,7 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Initialization follows the public OpenOrbis input sample. */
 #include "controller.h"
+#include "diagnostics.h"
 #include <string.h>
+#if X4_INPUT_TRACE
+#include <stdio.h>
+#endif
 #include <orbis/UserService.h>
 static void open_controller(X4Controller *c)
 {
@@ -47,6 +51,21 @@ void x4_controller_read(X4Controller *c, unsigned frame)
     c->pressed = data.buttons & ~c->previous;
     c->previous = data.buttons;
     c->data = data;
+#if X4_INPUT_TRACE
+    /* Numeric, bounded trigger-only evidence; never log text or account data. */
+    static uint32_t trace_previous = UINT32_MAX;
+    static unsigned trace_count;
+    uint32_t trace_value = data.analogButtons.l2 | ((uint32_t)data.analogButtons.r2 << 8) |
+        ((data.buttons & (ORBIS_PAD_BUTTON_L2 | ORBIS_PAD_BUTTON_R2)) << 16);
+    if (!x4_input_diagnostics_enabled()) { trace_previous = UINT32_MAX; trace_count = 0; }
+    else if (trace_value != trace_previous && trace_count < 64) {
+        printf("Nexo input raw: connected=%u rc=%d l2=%u r2=%u l2bit=%u r2bit=%u\n",
+            (unsigned)data.connected, rc, (unsigned)data.analogButtons.l2,
+            (unsigned)data.analogButtons.r2, !!(data.buttons & ORBIS_PAD_BUTTON_L2),
+            !!(data.buttons & ORBIS_PAD_BUTTON_R2));
+        trace_previous = trace_value; ++trace_count;
+    }
+#endif
 }
 void x4_controller_close(X4Controller *c)
 {

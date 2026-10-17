@@ -3,10 +3,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../media/live_trace.h"
-enum { X4_LIVE_WIDTH = 1280, X4_LIVE_HEIGHT = 720, X4_LIVE_AU_MAX = 2 * 1024 * 1024,
+enum { X4_LIVE_WIDTH = 1920, X4_LIVE_HEIGHT = 1080, X4_LIVE_AU_MAX = 2 * 1024 * 1024,
     X4_LIVE_COPY_READERS = 4 };
 typedef struct {
     void *state;
+    int stream_profile; /* Immutable decoder session limit; 0=720p, 1=1080p. */
     uint32_t *pixels;
     unsigned width, height;
     uint64_t frames;

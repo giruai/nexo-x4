@@ -41,17 +41,36 @@ for module in "${RUNTIME_FILES[@]}"; do
     cp "$X4_RUNTIME_MODULES/$module" "build/package/sce_module/$module"
 done
 cp assets/icon0.png build/package/sce_sys/icon0.png
+cp LICENSE build/package/LICENSE
 cp LICENSE build/package/LICENSE.txt
 cp THIRD_PARTY_NOTICES.md build/package/THIRD_PARTY_NOTICES.md
 cp CREDITS.md build/package/CREDITS.md
-mkdir -p build/package/licenses
+mkdir -p build/package/docs
+cp docs/LEGAL.md docs/PRIVACY.md build/package/docs/
+mkdir -p build/package/docs/licenses
 LICENSE_FILES=(docs/licenses/*)
-cp "${LICENSE_FILES[@]}" build/package/licenses/
-PACKAGE_FILES='eboot.bin assets/sample.h264 sce_module/libSceFios2.prx sce_module/libc.prx sce_sys/param.sfo sce_sys/icon0.png LICENSE.txt THIRD_PARTY_NOTICES.md CREDITS.md'
+cp "${LICENSE_FILES[@]}" build/package/docs/licenses/
+PACKAGE_FILES='eboot.bin assets/sample.h264 sce_module/libSceFios2.prx sce_module/libc.prx sce_sys/param.sfo sce_sys/icon0.png LICENSE LICENSE.txt THIRD_PARTY_NOTICES.md CREDITS.md'
+PACKAGE_FILES+=' docs/LEGAL.md docs/PRIVACY.md'
 PACKAGE_FILES+=' assets/psbox/fonts/Inter-Regular.ttf assets/psbox/fonts/Inter-SemiBold.ttf assets/psbox/fonts/Inter-Bold.ttf assets/psbox/fonts/OFL.txt'
 for license in "${LICENSE_FILES[@]}"; do
-    PACKAGE_FILES+=" licenses/${license##*/}"
+    PACKAGE_FILES+=" docs/licenses/${license##*/}"
 done
+# Ship the small public runtime source supplement with its notices too.
+mapfile -t RUNTIME_SOURCE_FILES < <(python3 - <<'RUNTIME'
+import json
+from pathlib import Path
+base=Path('vendor/openorbis-runtime')
+info=json.loads((base/'SOURCE.json').read_text())
+for name in sorted(list(info['files_sha256'])+['README.md','SOURCE.json','SDK-ARCHIVES.json']):
+    print(base/name)
+RUNTIME
+)
+for source_file in "${RUNTIME_SOURCE_FILES[@]}"; do
+    cp --parents "$source_file" build/package/
+    PACKAGE_FILES+=" $source_file"
+done
+export X4_PACKAGE_FILES="$PACKAGE_FILES"
 SFO='build/package/sce_sys/param.sfo'
 "$TOOLS/PkgTool.Core" sfo_new "$SFO"
 entry() { "$TOOLS/PkgTool.Core" sfo_setentry "$SFO" "$1" --type "$2" --maxsize "$3" --value "$4"; }
@@ -70,20 +89,24 @@ DIST="$PWD/dist"
     cd build/package
     "$TOOLS/create-gp4" -out nexo-x4.gp4 --content-id="$CONTENT_ID" \
         --files "$PACKAGE_FILES"
-    # OpenOrbis v0.5.4 emits a fixed GP4 directory list. Declare the notices
-    # directory as well, so LibOrbisPkg can resolve each licensed file.
-    python3 - <<'PY'
-from pathlib import Path
-project = Path('nexo-x4.gp4')
-text = project.read_text()
-if text.count('</rootdir>') != 1:
-    raise SystemExit('Expected one GP4 root directory declaration.')
-if text.count('<dir targ_name="assets">') != 1:
-    raise SystemExit('Expected one GP4 assets directory declaration.')
-text = text.replace('<dir targ_name="assets">', '<dir targ_name="assets"><dir targ_name="psbox"><dir targ_name="fonts" /></dir>')
-text = text.replace('</rootdir>', '<dir targ_name="licenses" />\n\t</rootdir>')
-project.write_text(text)
-PY
+    # Declare exactly the directories needed by the selected package files.
+    python3 - <<'PYGP4'
+import os
+from pathlib import PurePosixPath
+import xml.etree.ElementTree as ET
+project='nexo-x4.gp4'
+tree=ET.parse(project); root=tree.find('.//rootdir')
+if root is None:
+    raise SystemExit('Expected a GP4 rootdir element.')
+for child in list(root): root.remove(child)
+for filename in sorted(os.environ['X4_PACKAGE_FILES'].split()):
+    parent=root
+    for component in PurePosixPath(filename).parts[:-1]:
+        found=next((x for x in parent if x.get('targ_name')==component),None)
+        if found is None: found=ET.SubElement(parent,'dir',{'targ_name':component})
+        parent=found
+tree.write(project,encoding='utf-8',xml_declaration=True)
+PYGP4
     "$TOOLS/PkgTool.Core" pkg_build nexo-x4.gp4 "$DIST"
 )
 mv "dist/$CONTENT_ID.pkg" "dist/Nexo-X4-v$PACKAGE_VERSION-ps4$PACKAGE_SUFFIX.pkg"

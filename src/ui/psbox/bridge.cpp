@@ -2,6 +2,9 @@
 // Public C bridge to PSBox's actual AppUi/Canvas, with XCloud4's real titles.
 #include "bridge.h"
 #include "prefs.h"
+#include "overlay_copy.h"
+#include "queue_view.h"
+#include <climits>
 #include "ui/app_ui.h"
 #include "ui/strings.h"
 #include "ui/stream_menu.h"
@@ -32,6 +35,10 @@ struct X4PsboxUi {
     enum X4AuthState auth_state = X4_AUTH_IDLE;
     enum X4CatalogState catalog_state = X4_CATALOG_IDLE;
     bool session_terminal = false;
+    enum X4SessionState previous_session_state = X4_SESSION_IDLE;
+    unsigned previous_session_elapsed = 0;
+    int initial_queue_seconds = -1;
+    unsigned initial_queue_elapsed = 0;
 
     X4PsboxUi() : images([this] { image_ready.store(true, std::memory_order_release); },
         48u << 20, "/data/xcloud4-cache/psbox", 128u << 20),
@@ -104,6 +111,9 @@ extern "C" X4PsboxUi* x4_psbox_create(const char* font_dir) {
     if (!ui) return nullptr;
     xc::ui::setLanguage(xc::ui::Language::Spanish);
     if (!ui->fonts.load(font_dir)) return nullptr;
+    xc::ui::SettingsChoice settings;
+    settings.language = 2; settings.resolution = 1;
+    ui->app.setSettings(settings);
     ui->app.showSplash("Pulsa X para iniciar sesión");
     return ui.release();
 }
@@ -119,6 +129,9 @@ extern "C" int x4_psbox_set_prefs_dir(X4PsboxUi* ui, const char* directory) {
     xc::ui::setLanguage(static_cast<xc::ui::Language>(ui->prefs.language));
     xc::ui::SettingsChoice settings;
     settings.language = ui->prefs.language;
+    settings.resolution = ui->prefs.stream_profile ? 0 : 1;
+    settings.diagnostics = ui->prefs.diagnostics;
+    ui->menu.setPlaybackOptions(ui->prefs.stream_profile, ui->prefs.diagnostics);
     ui->app.setSettings(settings);
     ui->app.setPrefs(ui->prefs.hidden, static_cast<xc::ui::LibrarySort>(ui->prefs.sort));
     ui->app.invalidate();
@@ -215,7 +228,10 @@ extern "C" void x4_psbox_set_auth(X4PsboxUi* ui, const X4AuthSnapshot* auth) {
     } else if (auth->state == X4_AUTH_CONNECTING || auth->state == X4_AUTH_CONNECTED) {
         ui->app.showSplash(auth->stage[0] ? auth->stage : "Conectando");
     } else if (auth->state == X4_AUTH_IDLE || auth->state == X4_AUTH_CANCELLED) {
-        ui->app.showSplash("Pulsa X para iniciar sesión");
+        xc::ui::SettingsChoice settings;
+    settings.language = 2; settings.resolution = 1;
+    ui->app.setSettings(settings);
+    ui->app.showSplash("Pulsa X para iniciar sesión");
     }
 }
 
@@ -232,6 +248,57 @@ extern "C" void x4_psbox_set_launch(X4PsboxUi* ui, const char* title_id, const c
 extern "C" void x4_psbox_set_session(X4PsboxUi* ui, const X4SessionSnapshot* session,
                                        const char* title_id) {
     if (!ui || !session) return;
+    const bool reset_queue = session->state == X4_SESSION_IDLE ||
+        session->elapsed_seconds < ui->previous_session_elapsed ||
+        (session->state == X4_SESSION_STARTING && ui->previous_session_state != X4_SESSION_STARTING);
+    if (reset_queue) {
+        ui->initial_queue_seconds = -1;
+        ui->initial_queue_elapsed = 0;
+        ui->app.setQueueInfo("");
+    }
+    ui->previous_session_state = session->state;
+    ui->previous_session_elapsed = session->elapsed_seconds;
+    const auto& estimate = session->queue_estimate;
+    auto age = [session](unsigned received) -> int {
+        if (received > session->elapsed_seconds) return 0;
+        unsigned delta = session->elapsed_seconds - received;
+        return delta > INT_MAX ? INT_MAX : static_cast<int>(delta);
+    };
+    if (ui->initial_queue_seconds < 0 && (estimate.present_mask & X4_QUEUE_TOTAL)) {
+        ui->initial_queue_seconds = static_cast<int>(estimate.total_seconds);
+        ui->initial_queue_elapsed = estimate.updated_elapsed_seconds;
+    }
+    std::string queue_details;
+    if (session->state == X4_SESSION_WAITING) {
+        X4QueueViewInput view{};
+        view.elapsed_seconds = session->elapsed_seconds;
+        view.allocation_seconds = estimate.present_mask & X4_QUEUE_ALLOCATION ?
+            static_cast<int>(estimate.allocation_seconds) : -1;
+        view.provisioning_seconds = estimate.present_mask & X4_QUEUE_PROVISIONING ?
+            static_cast<int>(estimate.provisioning_seconds) : -1;
+        view.total_seconds = estimate.present_mask & X4_QUEUE_TOTAL ?
+            static_cast<int>(estimate.total_seconds) : -1;
+        switch (estimate.result) {
+        case X4_QUEUE_AVAILABLE: view.estimate_status = X4_QUEUE_EST_AVAILABLE; break;
+        case X4_QUEUE_UNAVAILABLE: view.estimate_status = X4_QUEUE_EST_UNAVAILABLE; break;
+        case X4_QUEUE_ERROR: view.estimate_status = X4_QUEUE_EST_ERROR; break;
+        default: view.estimate_status = X4_QUEUE_EST_NONE; break;
+        }
+        view.estimate_age_seconds = estimate.present_mask ? age(estimate.updated_elapsed_seconds) : -1;
+        view.estimate_stale = estimate.result != X4_QUEUE_AVAILABLE || view.estimate_age_seconds > 60 ||
+            session->remote_state != X4_REMOTE_WAITING_FOR_RESOURCES;
+        view.initial_estimate_seconds = ui->initial_queue_seconds;
+        view.initial_estimate_age_seconds = ui->initial_queue_seconds >= 0 ? age(ui->initial_queue_elapsed) : -1;
+        view.last_poll_age_seconds = session->state_poll_count ? age(session->last_state_poll_elapsed_seconds) : -1;
+        view.seconds_left = session->seconds_left > INT_MAX ? INT_MAX : static_cast<int>(session->seconds_left);
+        view.region = session->region;
+        X4QueueViewText text{};
+        x4_queue_view_format(&view, &text);
+        for (unsigned i = 0; i < text.count; ++i) {
+            if (i) queue_details += '\n';
+            queue_details += text.lines[i];
+        }
+    }
     const char* stage = session->stage[0] ? session->stage : "Preparando sesión";
     switch (session->state) {
     case X4_SESSION_STARTING: case X4_SESSION_WAITING: case X4_SESSION_READY:
@@ -239,6 +306,7 @@ extern "C" void x4_psbox_set_session(X4PsboxUi* ui, const X4SessionSnapshot* ses
     case X4_SESSION_NEGOTIATING: case X4_SESSION_CONNECTING:
         ui->session_terminal = false;
         x4_psbox_set_launch(ui, title_id, stage);
+        ui->app.setQueueInfo(queue_details);
         break;
     case X4_SESSION_STREAMING:
         ui->session_terminal = false;
@@ -254,6 +322,7 @@ extern "C" void x4_psbox_set_session(X4PsboxUi* ui, const X4SessionSnapshot* ses
     case X4_SESSION_STOPPING:
         ui->session_terminal = false;
         x4_psbox_set_launch(ui, title_id, stage);
+        ui->app.setQueueInfo(queue_details);
         break;
     case X4_SESSION_CLOSED: case X4_SESSION_CANCELLED:
         ui->session_terminal = true;
@@ -335,6 +404,9 @@ extern "C" X4PsboxEvent x4_psbox_handle(X4PsboxUi* ui, const X4PsboxPad* pad) {
             event.settings.language < static_cast<int>(xc::ui::Language::Count)) {
             xc::ui::setLanguage(static_cast<xc::ui::Language>(event.settings.language));
             ui->prefs.language = event.settings.language;
+            ui->prefs.stream_profile = event.settings.resolution == 0 ? 1 : 0;
+            ui->prefs.diagnostics = event.settings.diagnostics;
+            ui->menu.setPlaybackOptions(ui->prefs.stream_profile, ui->prefs.diagnostics);
             if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs))
                 out.action = X4_PSB_ACTION_PREFS_SAVE_FAILED;
             ui->app.invalidate();
@@ -386,6 +458,12 @@ extern "C" int x4_psbox_detail_wanted(X4PsboxUi* ui, char product_id[32], uint64
     return 0;
 }
 
+extern "C" int x4_psbox_stream_profile(const X4PsboxUi *ui) {
+    return ui ? ui->prefs.stream_profile : 0;
+}
+extern "C" int x4_psbox_diagnostics(const X4PsboxUi *ui) {
+    return ui && ui->prefs.diagnostics;
+}
 extern "C" int x4_psbox_menu_open(const X4PsboxUi* ui) {
     return ui && ui->menu.isOpen();
 }
@@ -415,29 +493,29 @@ extern "C" enum X4PsboxMenuAction x4_psbox_menu_handle(X4PsboxUi* ui, const X4Ps
     case xc::ui::MenuAction::Leave: return X4_PSB_MENU_LEAVE;
     case xc::ui::MenuAction::XboxButton: return X4_PSB_MENU_GUIDE;
     case xc::ui::MenuAction::Stats: return X4_PSB_MENU_STATS;
+    case xc::ui::MenuAction::ProfileChanged:
+    case xc::ui::MenuAction::DiagnosticsChanged: {
+        int old_profile = ui->prefs.stream_profile;
+        ui->prefs.stream_profile = ui->menu.playbackProfile();
+        ui->prefs.diagnostics = ui->menu.diagnosticsOn();
+        xc::ui::SettingsChoice settings;
+        settings.language = ui->prefs.language;
+        settings.resolution = ui->prefs.stream_profile ? 0 : 1;
+        settings.diagnostics = ui->prefs.diagnostics;
+        ui->app.setSettings(settings);
+        if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs))
+            return X4_PSB_MENU_PREFS_FAILED;
+        return old_profile != ui->prefs.stream_profile ? X4_PSB_MENU_PROFILE : X4_PSB_MENU_DIAGNOSTICS;
+    }
     default: return X4_PSB_MENU_NONE;
     }
 }
 
+/* Canvas layers are opaque on PS4. Copy only their rectangles directly
+ * into VideoOut; alpha blending would read slow WC memory on every frame. */
 static void composite_canvas(uint32_t* target, const xc::ui::Canvas& source,
-                             int left, int top, unsigned opacity) {
-    for (int y = 0; y < source.height(); ++y) {
-        int dest_y = top + y;
-        if (dest_y < 0 || dest_y >= 1080) continue;
-        for (int x = 0; x < source.width(); ++x) {
-            int dest_x = left + x;
-            if (dest_x < 0 || dest_x >= 1920) continue;
-            uint32_t src = source.data()[(size_t)y * source.width() + x];
-            unsigned alpha = (src >> 24) * opacity / 255;
-            if (!alpha) continue;
-            uint32_t& dst = target[(size_t)dest_y * 1920 + dest_x];
-            unsigned inverse = 255 - alpha;
-            unsigned red = ((src & 255) * alpha + (dst & 255) * inverse) / 255;
-            unsigned green = (((src >> 8) & 255) * alpha + ((dst >> 8) & 255) * inverse) / 255;
-            unsigned blue = (((src >> 16) & 255) * alpha + ((dst >> 16) & 255) * inverse) / 255;
-            dst = 0xff000000u | (blue << 16) | (green << 8) | red;
-        }
-    }
+                             int left, int top) {
+    x4_overlay_copy(target, 1920, 1080, source.data(), source.width(), source.height(), left, top);
 }
 
 extern "C" int x4_psbox_menu_composite(X4PsboxUi* ui, uint32_t* pixels,
@@ -456,17 +534,17 @@ extern "C" int x4_psbox_menu_composite(X4PsboxUi* ui, uint32_t* pixels,
     visible.onScreenMs = info->on_screen_ms;
     visible.degraded = info->degraded != 0;
     if (ui->menu.isOpen()) {
-        xc::ui::Canvas layer = ui->menu.renderMenu(visible);
+        const xc::ui::Canvas& layer = ui->menu.renderMenu(visible);
         composite_canvas(pixels, layer, xc::ui::StreamMenu::kMenuX,
-            xc::ui::StreamMenu::kMenuY, 235);
+            xc::ui::StreamMenu::kMenuY);
     } else if (ui->menu.statsOn()) {
-        xc::ui::Canvas layer = ui->menu.renderStats(visible);
+        const xc::ui::Canvas& layer = ui->menu.renderStats(visible);
         composite_canvas(pixels, layer, xc::ui::StreamMenu::kStatsX,
-            xc::ui::StreamMenu::kStatsY, 220);
+            xc::ui::StreamMenu::kStatsY);
     } else if (visible.degraded) {
-        xc::ui::Canvas layer = ui->menu.renderWarning();
+        const xc::ui::Canvas& layer = ui->menu.renderWarning();
         composite_canvas(pixels, layer, xc::ui::StreamMenu::kWarnRight - layer.width(),
-            xc::ui::StreamMenu::kWarnY, 220);
+            xc::ui::StreamMenu::kWarnY);
     }
     return 0;
 }

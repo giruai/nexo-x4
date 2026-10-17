@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "queue_estimate.h"
 
 /* Public view of one Xbox cloud session preparation. This milestone asks
  * Xbox to provision a cloud session, waits until the server reports it ready
@@ -42,6 +43,13 @@ enum X4SessionState {
     X4_SESSION_STREAMING,
 };
 
+/* Last validated /state response; UNKNOWN includes unrecognized server
+ * strings. This is observed state, independent of the optional wait estimate. */
+enum X4RemoteQueueState {
+    X4_REMOTE_UNKNOWN, X4_REMOTE_WAITING_FOR_RESOURCES, X4_REMOTE_PROVISIONING,
+    X4_REMOTE_READY_TO_CONNECT, X4_REMOTE_PROVISIONED, X4_REMOTE_FAILED
+};
+
 /* Holds no token, session path, session ID or server body. stage is always
  * copied from a constant literal. passport_http_status is the status of the
  * last Microsoft exchange of the authorization step (access renewal or
@@ -62,6 +70,9 @@ typedef struct {
     int input_ready, input_error;
     uint64_t input_packets, input_dropped;
     unsigned elapsed_seconds, seconds_left;
+    enum X4RemoteQueueState remote_state;
+    unsigned state_poll_count, last_state_poll_elapsed_seconds;
+    X4QueueEstimate queue_estimate;
     char stage[80], region[80], offering[24], title_name[128];
 } X4SessionSnapshot;
 

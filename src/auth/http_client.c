@@ -2,6 +2,7 @@
 #include "http_client.h"
 #include "body_decode.h"
 #include "catalog_page.h"
+#include "queue_estimate.h"
 #include "../core/module.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,6 +16,7 @@
 #define X4_HTTP_POOL_SIZE (512 * 1024)
 #define X4_HTTP_DEADLINE_USEC (30ull * 1000 * 1000)
 #define X4_HTTP_TITLES_DEADLINE_USEC (180ull * 1000 * 1000)
+#define X4_HTTP_WAITTIME_DEADLINE_USEC (3ull * 1000 * 1000)
 #define X4_HTTP_CHUNK 4096u
 #define X4_HTTP_LOG_BYTES (256u * 1024u)
 #define X4_HTTP_LOG_USEC (5ull * 1000 * 1000)
@@ -951,6 +953,32 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
     return transfer(h, o, "cloud-session", false, body, capacity, length, status, cancel, 0);
 }
 
+static int perform_waittime(X4Http *h, const char *url,
+    const X4HttpHeader *headers, size_t count, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel)
+{
+    h->stage = "argumentos HTTPS";
+    if (!url || !body || !capacity || capacity > 8193 || !length || !status)
+        return X4_HTTP_ARGUMENT;
+    body[0] = 0;
+    *length = 0;
+    *status = 0;
+    if (h->unusable) { h->stage = "HTTPS inutilizable"; return X4_HTTP_UNUSABLE; }
+    h->stage = "URL rechazada";
+    if (!x4_queue_waittime_url_valid(url)) return X4_HTTP_URL;
+    h->stage = "cabecera rechazada";
+    if (count != X4_HTTP_SESSION_HEADERS) return X4_HTTP_ARGUMENT;
+    int rc = check_headers(DEST_SESSION, headers, count);
+    if (rc) return rc;
+    Owned *o = own(X4_HTTP_METHOD_GET, url, NULL, 0, NULL, headers, count);
+    if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
+    uint64_t now = sceKernelGetProcessTime();
+    uint64_t deadline = now > UINT64_MAX - X4_HTTP_WAITTIME_DEADLINE_USEC ?
+        UINT64_MAX : now + X4_HTTP_WAITTIME_DEADLINE_USEC;
+    return transfer(h, o, "cloud-waittime", false, body, capacity, length,
+        status, cancel, deadline);
+}
+
 /* Fixed destination: only the form comes from the caller. */
 static int perform_passport(X4Http *h, const char *form, char *body, size_t capacity, size_t *length,
     int *status, const _Atomic int *cancel)
@@ -1135,6 +1163,23 @@ int x4_http_session_request(X4Http *h, enum X4HttpSessionMethod method, const ch
     if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
     int rc = perform_session(h, method, url, headers, header_count, json, body, capacity, length, status,
         cancel);
+    atomic_store(&h->busy, false);
+    return rc;
+}
+
+int x4_http_waittime_request(X4Http *h, const char *url,
+    const X4HttpHeader *headers, size_t header_count, char *body,
+    size_t capacity, size_t *length, int *status, const _Atomic int *cancel)
+{
+    if (!h) {
+        if (length) *length = 0;
+        if (status) *status = 0;
+        if (body && capacity) body[0] = 0;
+        return X4_HTTP_ARGUMENT;
+    }
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    int rc = perform_waittime(h, url, headers, header_count, body,
+        capacity, length, status, cancel);
     atomic_store(&h->busy, false);
     return rc;
 }

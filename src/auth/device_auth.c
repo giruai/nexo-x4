@@ -14,6 +14,9 @@
 #include <orbis/libkernel.h>
 #include <orbis/UserService.h>
 
+/* Work configuration stays private to the two auth implementation units. */
+extern void x4_xbox_work_set_stream_profile(X4XboxWork *, int);
+
 /* X4_AUTH_CLIENT_ID comes from auth_profile.h: one compile-time profile
  * (own registration or the temporary reference client) for the whole
  * process. Device code, polling, renewal and Passport all use it. */
@@ -77,6 +80,7 @@ struct X4Auth {
     X4XboxWork *xwork; /* catalog and session runs only */
     /* Private session run arguments, copied from the catalog before start. */
     X4CatalogTitle session_title;
+    int selected_stream_profile, session_stream_profile;
     char session_offering[24];
     uint64_t token_expiry; /* monotonic usec, 0 when no token is held */
     char access_token[X4_AUTH_TOKEN_SIZE], refresh_token[X4_AUTH_TOKEN_SIZE];
@@ -824,6 +828,7 @@ static void catalog_run(X4Auth *a)
 static void session_run(X4Auth *a)
 {
     X4XboxWork *w = a->xwork;
+    x4_xbox_work_set_stream_profile(w, a->session_stream_profile);
     if (!a->token_expiry || now() >= a->token_expiry) {
         reset_session(a, X4_SESSION_ERROR, X4_AUTH_E_SIGNED_OUT, "token Microsoft caducado",
             a->session_title.name[0] ? a->session_title.name : a->session_title.id, a->session_offering, NULL);
@@ -1010,6 +1015,8 @@ X4Auth *x4_auth_create(void)
     atomic_init(&a->bitrate_session_active, 0);
     atomic_flag_clear(&a->lock);
     a->store_user = -1;
+    a->selected_stream_profile = X4_STREAM_720;
+    a->session_stream_profile = X4_STREAM_720;
     publish(a, X4_AUTH_IDLE, 0, 0, "sin cuenta Microsoft", NULL, NULL, 0);
     reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
     reset_session(a, X4_SESSION_IDLE, 0, "sin sesion", NULL, NULL, NULL);
@@ -1029,6 +1036,19 @@ X4Auth *x4_auth_create(void)
 int x4_auth_busy(X4Auth *a)
 {
     return a && !atomic_load_explicit(&a->finished, memory_order_acquire);
+}
+
+int x4_auth_set_stream_profile(X4Auth *a, int profile)
+{
+    if (!a || !x4_stream_profile_valid(profile)) return X4_AUTH_E_ARGUMENT;
+    if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
+    a->selected_stream_profile = profile;
+    return 0;
+}
+
+int x4_auth_stream_profile(const X4Auth *a)
+{
+    return a ? a->selected_stream_profile : X4_STREAM_720;
 }
 
 /* Main thread, after join and expiry checks. Publishes LOADING first. */
@@ -1176,6 +1196,7 @@ int x4_auth_start_session(X4Auth *a, unsigned index)
         return X4_AUTH_E_ALLOCATION;
     }
     a->session_title = title;
+    a->session_stream_profile = a->selected_stream_profile;
     copy_text(a->session_offering, sizeof(a->session_offering), offering);
     a->action = X4_AUTH_XBOX_SESSION;
 #if X4_RUMBLE
@@ -1368,7 +1389,9 @@ void x4_auth_request_keyframe(X4Auth *a)
 
 int x4_auth_request_bitrate(X4Auth *a, unsigned kbps)
 {
-    if (!a || kbps < 3000 || kbps > 8000) return X4_AUTH_E_ARGUMENT;
+    if (!a) return X4_AUTH_E_ARGUMENT;
+    X4StreamProfile config = x4_stream_profile_get(a->session_stream_profile);
+    if (kbps < config.min_kbps || kbps > config.max_kbps) return X4_AUTH_E_ARGUMENT;
     if (!atomic_load_explicit(&a->bitrate_session_active, memory_order_acquire) ||
         atomic_load_explicit(&a->finished, memory_order_acquire) ||
         atomic_load_explicit(&a->cancel, memory_order_acquire)) return X4_AUTH_E_BUSY;

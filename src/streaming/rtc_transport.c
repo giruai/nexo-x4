@@ -4,6 +4,7 @@
 #include "rtc_receive_diag.h"
 #include "nack_grace_inbox.h"
 #include "../input/rumble.h"
+#include "../input/diagnostics.h"
 #include "../media/live_trace.h"
 #include "../auth/json.h"
 #include <rtc/rtc.h>
@@ -37,6 +38,7 @@ static unsigned slots_used;
 static atomic_flag callback_gate = ATOMIC_FLAG_INIT;
 
 struct X4Rtc {
+    X4StreamProfile profile;
     int pc, video, audio, channels[4];
     CallbackSlot *slot;
     atomic_int state, error;
@@ -510,7 +512,20 @@ static void input_error(X4Rtc *rtc,int error)
 static void *input_sender(void *pointer)
 {
     X4Rtc *rtc=pointer;
+#if X4_INPUT_TRACE
+    uint32_t trace_previous = UINT32_MAX;
+    unsigned trace_count = 0;
+    bool trace_was_enabled = false;
+#endif
     while(!atomic_load(&rtc->input_stop)) {
+#if X4_INPUT_TRACE
+        bool trace_enabled = x4_input_diagnostics_enabled();
+        if (trace_enabled && !trace_was_enabled) {
+            trace_previous = UINT32_MAX;
+            trace_count = 0;
+        }
+        trace_was_enabled = trace_enabled;
+#endif
         uint64_t until=sceKernelGetProcessTime()+INPUT_INTERVAL_USEC;
         lock(&rtc->data_gate);
         X4GamepadSource source=rtc->input_source;
@@ -534,6 +549,15 @@ static void *input_sender(void *pointer)
                     uint8_t packet[38];
                     input_gamepad(rtc,&frame,packet);
                     int rc=rtcSendMessage(rtc->channels[2],(const char *)packet,sizeof(packet));
+#if X4_INPUT_TRACE
+                    uint32_t trace_value = frame.left_trigger | ((uint32_t)frame.right_trigger << 16);
+                    if (trace_enabled && trace_value != trace_previous && trace_count < 64) {
+                        printf("Nexo input wire: lt=%u rt=%u bytes_rt=%02x%02x buffered=%d rc=%d\n",
+                            (unsigned)frame.left_trigger, (unsigned)frame.right_trigger,
+                            (unsigned)packet[28], (unsigned)packet[29], buffered, rc);
+                        trace_previous = trace_value; ++trace_count;
+                    }
+#endif
                     if(rc<0) {atomic_fetch_add(&rtc->input_dropped,1);input_error(rtc,rc);}
                     else {atomic_fetch_add(&rtc->input_packets,1);input_error(rtc,0);}
                 }
@@ -582,9 +606,16 @@ static void start_channels(X4Rtc *rtc)
     rc |= startup_message(message, "/streaming/properties/clientappinstallidchanged", "{\"clientAppInstallId\":\"f9ac8684-1032-4131-bb47-d2f58da9bb93\"}");
     rc |= startup_message(message, "/streaming/characteristics/orientationchanged", "{\"orientation\":0}");
     rc |= startup_message(message, "/streaming/characteristics/touchinputenabledchanged", "{\"touchInputEnabled\":false}");
-    printf("Nexo X4: RTC video request width=1280 height=720 max_fps=60 bitrate_kbps=8000\n");
-    rc |= startup_message(message, "/streaming/characteristics/clientdevicecapabilities", "{\"supportsCustomResolution\":true,\"supportsHevc\":false,\"supportsHdr\":false,\"supportsFps\":60,\"maxWidth\":1280,\"maxHeight\":720,\"maxBitrateKbps\":8000,\"video\":{\"width\":1280,\"height\":720,\"maxWidth\":1280,\"maxHeight\":720,\"maxBitrateKbps\":8000}}");
-    rc |= startup_message(message, "/streaming/characteristics/dimensionschanged", "{\"horizontal\":1280,\"vertical\":720,\"preferredWidth\":1280,\"preferredHeight\":720,\"safeAreaLeft\":0,\"safeAreaTop\":0,\"safeAreaRight\":1280,\"safeAreaBottom\":720,\"supportsCustomResolution\":true}");
+    X4StreamProfile p = rtc->profile;
+    char capabilities[512], dimensions[384];
+    if (x4_stream_profile_capabilities(p, capabilities, sizeof(capabilities)) < 0 ||
+        x4_stream_profile_dimensions(p, dimensions, sizeof(dimensions)) < 0) {
+        fail(rtc, -42); return;
+    }
+    printf("Nexo X4: RTC video request width=%u height=%u max_fps=%u bitrate_kbps=%u\n",
+        p.width, p.height, p.fps, p.max_kbps);
+    rc |= startup_message(message, "/streaming/characteristics/clientdevicecapabilities", capabilities);
+    rc |= startup_message(message, "/streaming/characteristics/dimensionschanged", dimensions);
     if (rc < 0) fail(rtc, -42);
     else {atomic_store(&rtc->startup_complete,true);printf("Nexo X4: RTC canales Xbox preparados\n");}
 }
@@ -634,12 +665,14 @@ static void channel_message(int channel, const char *data, int size, void *point
     leave(pointer);
 }
 
-X4Rtc *x4_rtc_open(int *error)
+X4Rtc *x4_rtc_open_profile(int profile, int *error)
 {
     int rc = -44;
+    if (!x4_stream_profile_valid(profile)) { if (error) *error = -1; return NULL; }
     if (x4_native_entropy_prepare() < 0 || x4_native_net_prepare() < 0) goto fail_no_context;
     X4Rtc *rtc = calloc(1, sizeof(*rtc));
     if (!rtc) goto fail_no_context;
+    rtc->profile = x4_stream_profile_get(profile);
     rtc->pc = rtc->video = rtc->audio = -1;
     rtc->started_at = sceKernelGetProcessTime();
     for (unsigned i=0;i<4;++i) rtc->channels[i]=-1;
@@ -694,7 +727,7 @@ X4Rtc *x4_rtc_open(int *error)
     rtcTrackInit audio={.direction=RTC_DIRECTION_RECVONLY,.codec=RTC_CODEC_OPUS,.payloadType=111,.mid="0",
         .profile="minptime=10;useinbandfec=1;stereo=1"};
     rtcTrackInit video={.direction=RTC_DIRECTION_RECVONLY,.codec=RTC_CODEC_H264,.payloadType=102,.mid="1",
-        .profile="level-asymmetry-allowed=0;packetization-mode=1;profile-level-id=42e01f;max-fs=3600;max-mbps=108000"};
+        .profile=rtc->profile.h264_fmtp};
     CHECK(rtc->audio=rtcAddTrackEx(rtc->pc,&audio));
     CHECK(rtc->video=rtcAddTrackEx(rtc->pc,&video));
     int tracks[]={rtc->audio,rtc->video};
@@ -726,6 +759,11 @@ fail_context:
 fail_no_context:
     if(error)*error=rc;
     return NULL;
+}
+
+X4Rtc *x4_rtc_open(int *error)
+{
+    return x4_rtc_open_profile(X4_STREAM_720, error);
 }
 
 void x4_rtc_set_media_callback(X4Rtc *rtc,X4RtcMediaCallback callback,void *user)
@@ -863,7 +901,7 @@ void x4_rtc_snapshot(X4Rtc *rtc,X4RtcSnapshot *snapshot)
 }
 int x4_rtc_request_bitrate(X4Rtc *rtc, unsigned kbps)
 {
-    if (!rtc || kbps < 3000 || kbps > 8000) return -1;
+    if (!rtc || kbps < rtc->profile.min_kbps || kbps > rtc->profile.max_kbps) return -1;
     if (!atomic_load(&rtc->bitrate_supported) ||
         atomic_load(&rtc->state) != X4_RTC_CONNECTED || !atomic_load(&rtc->video_packets)) return -43;
     int rc = rtcRequestBitrate(rtc->video, kbps * 1000u);

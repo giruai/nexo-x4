@@ -37,6 +37,11 @@ ifneq ($(filter $(X4_RUMBLE),0 1),$(X4_RUMBLE))
 $(error X4_RUMBLE must be 0 or 1)
 endif
 CFLAGS += -DX4_NACK_GRACE_MS=$(X4_NACK_GRACE_MS) -DX4_RUMBLE=$(X4_RUMBLE)
+X4_INPUT_TRACE ?= 1
+ifneq ($(filter $(X4_INPUT_TRACE),0 1),$(X4_INPUT_TRACE))
+$(error X4_INPUT_TRACE must be 0 or 1)
+endif
+CFLAGS += -DX4_INPUT_TRACE=$(X4_INPUT_TRACE)
 X4_DEV_CONTROL ?= 0
 ifneq ($(filter $(X4_DEV_CONTROL),0 1),$(X4_DEV_CONTROL))
 $(error X4_DEV_CONTROL must be 0 or 1)

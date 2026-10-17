@@ -6,6 +6,7 @@
 #include <orbis/libkernel.h>
 #include "../video/display.h"
 #include "../input/controller.h"
+#include "../input/diagnostics.h"
 #include "../ui/screen.h"
 #include "../auth/auth_profile.h"
 #include "../media/live_media.h"
@@ -121,8 +122,6 @@ int main(void)
     x4_bitrate_init(&bitrate_control, sceKernelGetProcessTime());
 #if X4_PSBOX_UI
     X4PsboxUi *psbox = NULL;
-    uint32_t *overlay_scratch = NULL;
-    bool overlay_scratch_attempted = false;
     X4PsboxBackend *psbox_backend = NULL;
     X4AuthSnapshot psbox_auth_sent = {0};
     X4SessionSnapshot psbox_session_sent = {0};
@@ -161,11 +160,6 @@ reopen_interface:;
     x4_controller_init(&controller);
 #if X4_PSBOX_UI
     psbox = x4_psbox_create("/app0/assets/psbox/fonts");
-    if (psbox && !overlay_scratch_attempted) {
-        overlay_scratch_attempted = true;
-        overlay_scratch = malloc((size_t)X4_WIDTH * X4_HEIGHT * sizeof(*overlay_scratch));
-        if (!overlay_scratch) printf("Nexo X4: overlay scratch unavailable; using direct VideoOut composition\n");
-    }
     if (psbox) {
         if (x4_psbox_set_prefs_dir(psbox, "/data/xcloud4-ui") < 0)
             printf("Nexo X4: preferencias PSBox no disponibles\n");
@@ -197,6 +191,9 @@ reopen_interface:;
     printf("Nexo X4: %s\n", X4_AUTH_PROFILE_NOTE);
     printf("Nexo X4: diagnostic build=%s\n", X4_BUILD_ID);
     for (unsigned frame = 0;; ++frame) {
+#if X4_PSBOX_UI
+        x4_input_diagnostics_set(x4_psbox_diagnostics(psbox) != 0);
+#endif
         uint64_t input_at = sceKernelGetProcessTime();
         x4_trace_monitor_state(live ? x4_live_media_trace(live) : NULL,
             X4_MON_ACTOR_MAIN, X4_MON_PHASE_MAIN_POLL, input_at);
@@ -221,7 +218,7 @@ reopen_interface:;
             input_previous = input_at;
             if (!input_report_at) input_report_at = input_at;
             if (input_at - input_report_at >= 5000000) {
-                printf("Nexo X4 input: samples=%llu mean_us=%llu max_us=%llu idle_flips_skipped=%llu\n",
+                if (x4_input_diagnostics_enabled()) printf("Nexo X4 input: samples=%llu mean_us=%llu max_us=%llu idle_flips_skipped=%llu\n",
                     (unsigned long long)input_intervals,
                     (unsigned long long)(input_intervals ? input_interval_us / input_intervals : 0),
                     (unsigned long long)input_interval_max_us,
@@ -264,6 +261,8 @@ reopen_interface:;
             psbox_menu_capture = was_open || toggle;
             if (psbox_menu_action == X4_PSB_MENU_CLOSE || psbox_menu_action == X4_PSB_MENU_GUIDE)
                 x4_auth_request_keyframe(auth);
+            if (psbox_menu_action == X4_PSB_MENU_PREFS_FAILED)
+                printf("Nexo X4: no se pudieron guardar las opciones; siguen activas en memoria\n");
             if (psbox_menu_action == X4_PSB_MENU_GUIDE)
                 psbox_guide_until_us = input_at + 250000;
         }
@@ -624,8 +623,13 @@ reopen_interface:;
                     }
                     if (!live_error) {
                         live_retained = 0;
-                        live = x4_live_media_create(&live_error);
-                        x4_bitrate_init(&bitrate_control, input_at);
+                        int selected_profile = 0;
+#if X4_PSBOX_UI
+                        selected_profile = x4_psbox_stream_profile(psbox);
+#endif
+                        live_error = x4_auth_set_stream_profile(auth, selected_profile);
+                        if (!live_error) live = x4_live_media_create_profile(selected_profile, &live_error);
+                        x4_bitrate_init_profile(&bitrate_control, input_at, selected_profile);
                         diagnostic_stable = false;
                         diagnostic_mark = 0;
                         if (live) {
@@ -769,7 +773,8 @@ reopen_interface:;
             printf("Nexo X4: diagnostic phase=%s mark=%llu\n",
                 diagnostic_stable ? "stable" : "transition", (unsigned long long)diagnostic_mark);
         }
-        bool trace_active = live_visible && !live_retained && trace_session_active(session.state);
+        bool trace_active = live_visible && !live_retained && trace_session_active(session.state) &&
+            x4_input_diagnostics_enabled();
         x4_trace_set_active(live_trace, trace_active);
         /* Runs before the idle continue too: a repeated/status-only refresh
          * must not conceal a gap in actual NEW live completions. */
@@ -789,11 +794,7 @@ reopen_interface:;
         x4_trace_monitor_state(live_trace, X4_MON_ACTOR_MAIN, X4_MON_PHASE_DRAW, 0);
         uint32_t *display_pixels = x4_display_pixels(&display);
         uint32_t *live_pixels = display_pixels;
-#if X4_PSBOX_UI
-        if (live_visible && overlay_scratch &&
-            x4_psbox_needs_overlay(psbox, psbox_stream_info.degraded))
-            live_pixels = overlay_scratch;
-#endif
+        /* Opaque overlay copies do not read VideoOut: no full-frame scratch pass. */
         bool drew_live = live_visible && x4_live_media_draw(live, live_pixels);
         uint64_t drawn_generation = 0, drawn_output = 0;
         bool drawn_fresh = false;
@@ -864,17 +865,31 @@ reopen_interface:;
                 x4_catalog_draw(&catalog, &catalog_browser, x4_auth_busy(auth), x4_display_pixels(&display));
         }
         x4_exit_error_draw(screen.exit_error, drew_live ? live_pixels : display_pixels);
-#if X4_PSBOX_UI
-        /* All pixel-reading UI work is complete before the single WC write.
-         * A failed live draw never copies stale scratch into VideoOut. */
-        if (drew_live && live_pixels != display_pixels)
-            x4_live_copy_1080p_sse2(display_pixels, live_pixels, true);
-#endif
 #if X4_DEV_CONTROL
         x4_dev_control_capture(&dev_control, closing ? -1 : screen.page,
             x4_display_pixels(&display));
 #endif
         uint64_t present_begin = sceKernelGetProcessTime();
+        static uint64_t render_report_at, render_total_us, render_max_us, render_frames;
+        static int render_previous_menu = -1;
+        if (!x4_input_diagnostics_enabled()) {
+            render_report_at = render_total_us = render_max_us = render_frames = 0;
+            render_previous_menu = -1;
+        } else if (drew_live) {
+            int menu = 0;
+#if X4_PSBOX_UI
+            menu = x4_psbox_menu_open(psbox);
+#endif
+            if (menu != render_previous_menu) { render_total_us = render_max_us = render_frames = 0; render_report_at = present_begin; render_previous_menu = menu; }
+            uint64_t elapsed = present_begin - draw_at;
+            render_total_us += elapsed; ++render_frames; if (elapsed > render_max_us) render_max_us = elapsed;
+            if (present_begin - render_report_at >= 5000000) {
+                printf("Nexo render: menu=%d render_frames=%llu mean_us=%llu render_max_us=%llu width=%u height=%u\n",
+                    menu, (unsigned long long)render_frames, (unsigned long long)(render_total_us / render_frames),
+                    (unsigned long long)render_max_us, live_status.width, live_status.height);
+                render_report_at = present_begin; render_total_us = render_max_us = render_frames = 0;
+            }
+        }
         rc = drew_live && trace_active ?
             x4_display_present_trace(&display, live_trace, drawn_generation, drawn_fresh) :
             x4_display_present(&display);

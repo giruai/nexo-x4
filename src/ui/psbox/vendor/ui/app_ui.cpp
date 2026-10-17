@@ -57,10 +57,14 @@ constexpr int kResolutionOrder[3] = {1, 0, 2};
 // settingsRow_ and the helpers use): language and sign-in country; the
 // stream (resolution, 120 Hz, bitrate, region); sound; the controller and
 // keyboard; updates last. A group starts at each kSettingsGroupStart.
+#ifdef X4_OPENORBIS
+constexpr int kSettingsOrder[kSettingRows] = {0, 1, 9, 8, 10, 2, 11, 3, 4, 5, 6, 12, 7};
+#else
 constexpr int kSettingsOrder[kSettingRows] = {0, 8, 1, 9, 10, 2, 11, 3, 4, 5, 6, 12, 7};
+#endif
 // PS4 bridge currently applies language only. Hide PS5-only video, haptics,
 // updates and account-country choices until XCloud4 has matching backends.
-constexpr int kPs4VisibleSettingsRows = 1;
+constexpr int kPs4VisibleSettingsRows = 3;
 constexpr bool kSettingsGroupStart[kSettingRows] = {false, false, true, false, false, false, true,
                                                     true, false, false, false, false, true};
 int settingsPos(int row) {
@@ -926,6 +930,7 @@ void AppUi::showHome(const std::string& toast) {
 
 void AppUi::showLaunching(const GameTile& game, const std::string& status) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (screen_ != Screen::Launching || launching_.titleId != game.titleId) queueInfo_.clear();
     screen_ = Screen::Launching;
     launching_ = game;
     status_ = status;
@@ -935,6 +940,14 @@ void AppUi::showLaunching(const GameTile& game, const std::string& status) {
 void AppUi::setLaunchStatus(const std::string& status) {
     std::lock_guard<std::mutex> lock(mutex_);
     status_ = status;
+    dirty_ = true;
+}
+
+void AppUi::setQueueInfo(const std::string& details) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string bounded = details.substr(0, 6u * 160u + 5u);
+    if (queueInfo_ == bounded) return;
+    queueInfo_ = std::move(bounded);
     dirty_ = true;
 }
 
@@ -1364,7 +1377,11 @@ std::vector<std::string> AppUi::settingOptions(int row) const {
     if (row == 0) {
         for (int i = 0; i < static_cast<int>(Language::Count); ++i) out.push_back(languageName(static_cast<Language>(i)));
     } else if (row == 1) {
-        out = {tr(Str::Res720), tr(Str::Res1080), tr(Str::ResBest)};  // kResolutionOrder
+        #ifdef X4_OPENORBIS
+        out = {"720p / 60 FPS", "1080p / 60 FPS (experimental)"};
+#else
+        out = {tr(Str::Res720), tr(Str::Res1080), tr(Str::ResBest)};
+#endif
     } else if (row == 3) {
         // Left and right stick (the tester changes them).
         out = {std::to_string(settings_.deadzone[0]) + " %  \xC2\xB7  " + std::to_string(settings_.deadzone[1]) + " %"};
@@ -1378,7 +1395,11 @@ std::vector<std::string> AppUi::settingOptions(int row) const {
     } else if (row == 7) {
         // Updates: Cross acts, no list.
     } else if (row == 9) {
+        #ifdef X4_OPENORBIS
+        out = {tr(Str::Deactivated), tr(Str::Activated)};
+#else
         out = {tr(Str::Deactivated), tr(Str::HighRefreshOn)};
+#endif
     } else if (row == 10) {
         out.push_back(tr(Str::BitrateAuto));
         for (int mbps : kBitrateCaps) out.push_back(std::to_string(mbps) + " Mbps");
@@ -1412,7 +1433,13 @@ int AppUi::settingSelected(int row) const {
     if (row == 5) return settings_.circleConfirms ? 1 : 0;
     if (row == 6) return settings_.lightBarMode;
     if (row == 7) return 0;
-    if (row == 9) return settings_.highRefresh ? 1 : 0;
+    if (row == 9) {
+#ifdef X4_OPENORBIS
+        return settings_.diagnostics ? 1 : 0;
+#else
+        return settings_.highRefresh ? 1 : 0;
+#endif
+    }
     if (row == 10) {
         for (size_t i = 0; i < std::size(kBitrateCaps); ++i)
             if (kBitrateCaps[i] == settings_.maxBitrateMbps) return static_cast<int>(i) + 1;
@@ -1451,7 +1478,11 @@ void AppUi::applySetting(int row, int index) {
         settings_.lightBarMode = index;
     } else if (row == 7) {
     } else if (row == 9) {
+        #ifdef X4_OPENORBIS
+        settings_.diagnostics = index == 1;
+#else
         settings_.highRefresh = index == 1;
+#endif
     } else if (row == 10) {
         settings_.maxBitrateMbps = index == 0 ? 0 : kBitrateCaps[index - 1];
     } else if (row == 11) {
@@ -3364,7 +3395,29 @@ void AppUi::drawLaunching(Canvas& c, uint64_t nowMs) {
     drawSpinner(c, kW / 2.0f, 420, 40, nowMs);
     drawCentered(c, fonts_.bold, launching_.name, 500, 48, kWhite);
     drawCentered(c, fonts_.semibold, tr(Str::GettingReady), 576, 30, kGray);
-    drawCentered(c, fonts_.regular, status_, 630, 26, kDim);
+    std::string stage = status_;
+#ifdef X4_OPENORBIS
+    // A transient transport stage belongs in diagnostics, not on this screen.
+    if (stage.find("HTTP") != std::string::npos || stage.find("PID") != std::string::npos ||
+        stage.find("0x") != std::string::npos || stage.find("0X") != std::string::npos)
+        stage = "Preparando la sesión";
+#endif
+    drawCentered(c, fonts_.regular, fonts_.regular.fit(stage, 26, 1260), 630, 26, kDim);
+    if (!queueInfo_.empty()) {
+        Rect panel{280, 670, 1360, 210};
+        c.fillRect(panel, rgba(10, 15, 22, 232), 16);
+        c.strokeRect(panel, rgba(85, 130, 168), 2, 16);
+        size_t start = 0;
+        for (int line = 0; line < 6 && start < queueInfo_.size(); ++line) {
+            size_t end = queueInfo_.find('\n', start);
+            if (end == std::string::npos) end = queueInfo_.size();
+            std::string shown = fonts_.regular.fit(
+                std::string_view(queueInfo_).substr(start, end - start), 22, panel.w - 72);
+            fonts_.regular.draw(c, shown, panel.x + 36, panel.y + 18 + line * 31,
+                22, line == 0 ? kWhite : kGray);
+            start = end == queueInfo_.size() ? end : end + 1;
+        }
+    }
     drawCentered(c, fonts_.regular, tr(Str::GestureHint), 900, 22, kDim);
     drawHints(c, {{kIconCircle, tr(Str::Cancel)}});
 }
@@ -3402,6 +3455,7 @@ void AppUi::drawSettings(Canvas& c) {
                                         tr(Str::HighRefresh),   tr(Str::BitrateCap),    tr(Str::GameVolume),
                                         tr(Str::KeyboardKeys)};
     constexpr int kRowW = 1200, kRowH = 46, kGap = 5, kGroupGap = 16;
+    labels[9] = "Diagnostico";
     Rect rows[kSettingRows];  // by row id
     int y = 236;
     for (int pos = 0; pos < kPs4VisibleSettingsRows; ++pos) {
@@ -3446,7 +3500,7 @@ void AppUi::drawSettings(Canvas& c) {
         }
         y += kRowH + kGap;
     }
-    for (const auto& line : fonts_.regular.wrap("En PS4, solo el idioma esta disponible por ahora.", 24, kRowW, 2)) {
+    for (const auto& line : fonts_.regular.wrap("El perfil se aplica al iniciar la proxima sesion. 1080p es experimental. Diagnostico: mandos y rendimiento.", 24, kRowW, 2)) {
         fonts_.regular.draw(c, line, kMargin, y + 20, 24, kDim);
         y += 34;
     }

@@ -180,6 +180,58 @@ static int test_overflow_and_gap(void)
     return 0;
 }
 
+static int test_experimental_1080_loss_and_recovery(void)
+{
+    X4StreamProfile baseline = x4_stream_profile_get(X4_STREAM_720);
+    X4StreamProfile profile = x4_stream_profile_get(X4_STREAM_1080);
+    CHECK(baseline.h264_level == 32);
+    CHECK(baseline.max_fs == 3600 && baseline.max_mbps == 216000);
+    CHECK(strstr(baseline.h264_fmtp, "profile-level-id=42e020") != NULL);
+    CHECK(((baseline.width + 15) / 16) * ((baseline.height + 15) / 16) <= baseline.max_fs);
+    CHECK(((baseline.width + 15) / 16) * ((baseline.height + 15) / 16) *
+        baseline.fps <= baseline.max_mbps);
+    CHECK(profile.width == 1920 && profile.height == 1080 && profile.fps == 60);
+    CHECK(profile.min_kbps == 5000 && profile.max_kbps == 15000);
+    CHECK(profile.h264_level == 42);
+    CHECK(((profile.width + 15) / 16) * ((profile.height + 15) / 16) <= profile.max_fs);
+    CHECK(((profile.width + 15) / 16) * ((profile.height + 15) / 16) *
+        profile.fps <= profile.max_mbps);
+    CHECK(strstr(profile.h264_fmtp, "profile-level-id=42e02a") != NULL);
+    CHECK(strstr(profile.h264_fmtp, "max-fs=8160;max-mbps=489600") != NULL);
+    char caps[512], dims[384], short_buffer[8];
+    CHECK(x4_stream_profile_capabilities(baseline, caps, sizeof(caps)) > 0);
+    CHECK(strstr(caps, "\"maxWidth\":1280,\"maxHeight\":720,\"maxBitrateKbps\":8000") != NULL);
+    CHECK(x4_stream_profile_capabilities(profile, caps, sizeof(caps)) > 0);
+    CHECK(strstr(caps, "\"maxWidth\":1920,\"maxHeight\":1080,\"maxBitrateKbps\":15000") != NULL);
+    CHECK(strstr(caps, "\"video\":{\"width\":1920,\"height\":1080") != NULL);
+    CHECK(x4_stream_profile_dimensions(profile, dims, sizeof(dims)) > 0);
+    CHECK(strstr(dims, "\"horizontal\":1920,\"vertical\":1080") != NULL);
+    CHECK(strstr(dims, "\"safeAreaRight\":1920,\"safeAreaBottom\":1080") != NULL);
+    CHECK(x4_stream_profile_capabilities(profile, short_buffer, sizeof(short_buffer)) < 0);
+    CHECK(x4_stream_profile_dimensions(profile, short_buffer, sizeof(short_buffer)) < 0);
+    Fixture f = {0};
+    x4_abr_init_profile(&f.policy, 0, X4_STREAM_1080);
+    (void)x4_abr_update(&f.policy, 0, &f.counters);
+    for (uint64_t s = 2; s <= 10; s += 2) {
+        X4AbrDecision d = tick(&f, s, 100, 0, 0, 0, 0);
+        CHECK(d.desired_kbps == 15000);
+        if (d.send_due) x4_abr_note_send(&f.policy, s * 1000000u, d.send_kbps, true);
+    }
+    for (uint64_t s = 12; s <= 62; s += 2) {
+        X4AbrDecision d = tick(&f, s, 90, 10, 0, 0, 0);
+        CHECK(d.desired_kbps >= 5000 && d.desired_kbps <= 15000);
+        if (d.send_due) x4_abr_note_send(&f.policy, s * 1000000u, d.send_kbps, true);
+    }
+    CHECK(f.policy.desired_kbps == 5000);
+    for (uint64_t s = 64; s <= 1064; s += 2) {
+        X4AbrDecision d = tick(&f, s, 100, 0, 0, 0, 0);
+        CHECK(d.desired_kbps >= 5000 && d.desired_kbps <= 15000);
+        if (d.send_due) x4_abr_note_send(&f.policy, s * 1000000u, d.send_kbps, true);
+    }
+    CHECK(f.policy.desired_kbps == 15000);
+    return 0;
+}
+
 int main(void)
 {
     CHECK(test_empty_and_warmup() == 0);
@@ -188,6 +240,7 @@ int main(void)
     CHECK(test_recovery_limits_and_retry() == 0);
     CHECK(test_floor_and_regressions() == 0);
     CHECK(test_overflow_and_gap() == 0);
+    CHECK(test_experimental_1080_loss_and_recovery() == 0);
     puts("adaptive_bitrate_test: all cases passed");
     return 0;
 }

@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../input/gamepad.h"
+#include "stream_profile.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -33,6 +34,8 @@ typedef struct {
  * never decode, block or render on this callback. */
 typedef void (*X4RtcMediaCallback)(void *user, int kind, const uint8_t *rtp, size_t size);
 X4Rtc *x4_rtc_open(int *error);
+/* Immutable profile copied when the RTC instance is created. */
+X4Rtc *x4_rtc_open_profile(int profile, int *error);
 void x4_rtc_set_media_callback(X4Rtc *, X4RtcMediaCallback, void *user);
 /* Session owner only, before dispatch starts. Trace outlives joined RTC. */
 void x4_rtc_set_diagnostic_trace(X4Rtc *, X4Trace *);

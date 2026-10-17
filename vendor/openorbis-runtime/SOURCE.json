@@ -1,0 +1,16 @@
+{
+  "upstream": "https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain",
+  "ref": "v0.5.4",
+  "toolchain_archive_sha256": "3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526",
+  "files_sha256": {
+    "src/modules/libc/Makefile": "a0bd79bdfcb2ceae4cfa31d3c9a25517080170e4ecd7dc38fbcbb091d1102670",
+    "src/modules/libc/libc/lib.c": "52e5b73b3ea5f7e157a475fb65319bb6939eec430edd8accd225cede2817d4cc",
+    "src/modules/libSceFios2/Makefile": "f02ea3b990819d41324d75475141e2fc9f2f9b75396cabbc4a28ea52887d5b5a",
+    "src/modules/libSceFios2/libSceFios2/lib.c": "cc014d782a8882e910bfbce532ad55db8f0fa73c664faceade9689c627caeeda",
+    "src/crt/crtlib.S": "f3d799268480d13d7d53aab166cebc7cd83278507ffda97d4bb0dcfac887ca90",
+    "src/crt/crtlib.c": "f61b856cb9ec85c740e9b57acb3b5a39a1713aa61caee9444d9fb8c38e4e01bb",
+    "src/crt/build.sh": "c01a0a6516fa1be5285ffe0da344030c47dda506f9fbeb9ad58a6cf5fa1e48bc",
+    "link.x": "e52b4bf39ecf6db66c861d130fe89a67aec6e34c5af394faf60331a1655769c1",
+    "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+  }
+}

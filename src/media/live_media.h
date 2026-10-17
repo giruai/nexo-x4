@@ -88,6 +88,7 @@ typedef struct {
  *   (x4_rtc_close returned) and any auth worker using the context was
  *   joined. No callback may run after close. */
 X4LiveMedia *x4_live_media_create(int *error);
+X4LiveMedia *x4_live_media_create_profile(int profile, int *error);
 /* Optional, before start: fix the negotiated RTP payload type (0..127) of a
  * kind. Without it the first valid packet of each kind locks the track. */
 int x4_live_media_set_payload_type(X4LiveMedia *media, int kind, int payload_type);

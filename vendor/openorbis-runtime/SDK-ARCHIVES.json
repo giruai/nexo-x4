@@ -1,0 +1,14 @@
+{
+  "sdk_release": "OpenOrbis v0.5.4",
+  "sdk_archive_sha256": "3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526",
+  "prebuilt_source_revision": "not independently established; compiler identity strings are not source revision evidence",
+  "files_sha256": {
+    "libc.a": "dd3f25830490bc0aab6a87a1bce890a502e2ec874ac8c3169e37210c4e49aef7",
+    "libc++.a": "9c0ddc37ccba2ab11b2a61a330af941c1bc0c806c8f6fade92db682049836e9a",
+    "libc++abi.a": "1f4b9aae6bbb78f2a175ac82b9fc5089f134299414c7c96aa71ad721ae041d2f",
+    "libunwind.a": "4d4162b86384613d88b63656d9ff2a65bcfdb1bba00a5d8ceaf0d4f7a53f3598",
+    "libclang_rt.builtins-x86_64.a": "fff0b4a5717e607bd9834e7349368a577d985022efb5868581786f89590d762f",
+    "crt1.o": "4173c4401c0b5d0a72c2641f712982bb38a78e346515278a32fa99d4bbf9dd86",
+    "crtlib.o": "0e4f27f1e88ded6c7f458e65c64c1a5cc70552bc7c31acb6b7818e4db3adae69"
+  }
+}

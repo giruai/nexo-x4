@@ -125,6 +125,15 @@ int x4_http_session_request(X4Http *http, enum X4HttpSessionMethod method, const
     const X4HttpHeader *headers, size_t header_count, const char *json, char *body, size_t capacity,
     size_t *length, int *status, const _Atomic int *cancel);
 
+/* Optional regional GET /v1/waittime/<validated title ID>. Exactly the
+ * session's three bearer/client/device headers; separate X4Http context is
+ * recommended so a quarantined estimate cannot disable session polling.
+ * Total request deadline is 3 s; each native I/O phase is capped to the
+ * remaining budget when configured. Response capacity is at most 8193. */
+int x4_http_waittime_request(X4Http *http, const char *url,
+    const X4HttpHeader *headers, size_t header_count, char *body,
+    size_t capacity, size_t *length, int *status, const _Atomic int *cancel);
+
 /* Constant literal naming the last stage reached; safe to show in the UI. */
 const char *x4_http_stage(const X4Http *http);
 /* Read on the owning worker after a request returns. False when cleanup left

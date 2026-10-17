@@ -115,6 +115,7 @@ struct SettingsChoice {
     int sharpness = 0;
     int deband = 3;
     int upscaler = 2;
+    bool diagnostics = false; // PS4 optional numeric logs
     bool highRefresh = false;  // 120 Hz output while a game streams
     int maxBitrateMbps = 0;    // 0 automatic, else 20 / 15 / 10 / 5
     int gameVolume = 100;      // percent: 25 / 50 / 75 / 100 / 150
@@ -236,6 +237,8 @@ public:
     void showHome(const std::string& toast = {});
     void showLaunching(const GameTile& game, const std::string& status);
     void setLaunchStatus(const std::string& status);
+    // Human-readable queue details; changing them does not restart the spinner.
+    void setQueueInfo(const std::string& details);
     void showStreaming();
     void showError(const std::string& message);
     // A game that could not start but may on another try (a free game got
@@ -466,6 +469,7 @@ private:
     Anim resultScroll_;
     GameTile detail_;  // the game the details page shows
     GameTile launching_;
+    std::string queueInfo_;
     std::string error_;
     GameTile errorGame_;  // showPlayError()'s game; empty for other errors
     SettingsChoice settings_;
