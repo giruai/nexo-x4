@@ -1,5 +1,9 @@
 # Changelog
 
+## Investigation — 2026-10-23
+
+Tested and rejected a local 0.1.11 decoder-scheduling experiment: deferring idle CPU-copy workers did not reach the 10% slow-frame target. Restored the tested 0.1.10 code and package; no experimental release was published. See [method, measurements and limits](docs/experiments/DECODE-SCHEDULING.md).
+
 ## 0.1.10 — unpublished performance build · PS4 APP_VER 01.42
 
 - Lease cached GPU readback destinations directly to bounded 1080p conversion jobs, eliminating the extra WB-to-WB memcpy after DMA.

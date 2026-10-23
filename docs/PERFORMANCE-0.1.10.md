@@ -38,6 +38,6 @@ Native Decode remained the largest measured cost: gameplay window means reached 
 
 No private logs, account data, console configuration or raw captures are included. Remote Play footage has its own resolution and does not prove native stream quality. The tested 0.1.9 release and its assets remain unchanged.
 
-## Proposed next goal
+## Follow-up investigation
 
-Profile native Decode and scheduling in fixed 1080p scenes, distinguish decoder cost from queue age, and test one bounded change against this candidate. Accept only a repeatable improvement without extra latency, unsafe native concurrency, broken 720p recovery or regressions in audio, input and saved sign-in. Do not change bitrate policy or decoder depth based on FPS alone.
+A local 0.1.11 candidate tested deferred CPU-copy workers with paired Decode wall/owner-CPU measurements. It did not reach the 10% slow-frame target and was discarded; the tested 0.1.10 source and package were restored. See the [experiment report](experiments/DECODE-SCHEDULING.md). Further work must distinguish native decoder/GPU synchronization from owner CPU cost before changing priority, affinity or depth.
