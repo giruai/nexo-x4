@@ -3,6 +3,10 @@
 #include <stddef.h>
 #include <stdio.h>
 
+/* 1080 negotiation adapted from XCloud4 GPL-3.0-only, commit
+ * 008f4abe4f777fafa4259fe081ebfab065eed2d5, stream_profile.c (G8).
+ * G8 inherits a 12000 kbps constructor field (not serialized in its empty
+ * capabilities message); its effective video SDP cap is 8000. Nexo also caps its active ABR requests at 8000 for consistency. */
 /* A session copies one of these values before its worker starts. 1080p is
  * experimental: advertising it does not establish decoder/render capacity. */
 typedef struct {
@@ -10,6 +14,7 @@ typedef struct {
     unsigned min_kbps, max_kbps;
     unsigned h264_level, max_fs, max_mbps;
     const char *h264_fmtp;
+    unsigned web_windows, video_sdp_kbps;
 } X4StreamProfile;
 
 enum { X4_STREAM_720 = 0, X4_STREAM_1080 = 1 };
@@ -23,14 +28,14 @@ static inline X4StreamProfile x4_stream_profile_get(int profile)
 {
     if (profile == X4_STREAM_1080) {
         X4StreamProfile config = {
-        1920, 1080, 60, 5000, 15000, 42, 8160, 489600,
-        "level-asymmetry-allowed=0;packetization-mode=1;profile-level-id=42e02a;max-fs=8160;max-mbps=489600"
+        1920, 1080, 60, 5000, 8000, 42, 8704, 522240,
+        "level-asymmetry-allowed=0;packetization-mode=1;profile-level-id=42e02a;max-fs=8704;max-mbps=522240", 1, 8000
         };
         return config;
     }
     X4StreamProfile config = {
         1280, 720, 60, 3000, 8000, 32, 3600, 216000,
-        "level-asymmetry-allowed=0;packetization-mode=1;profile-level-id=42e020;max-fs=3600;max-mbps=216000"
+        "level-asymmetry-allowed=0;packetization-mode=1;profile-level-id=42e020;max-fs=3600;max-mbps=216000", 0, 0
     };
     return config;
 }
@@ -39,11 +44,15 @@ static inline int x4_stream_profile_capabilities(X4StreamProfile p,
     char *out, size_t capacity)
 {
     if (!out || !capacity) return -1;
-    int n = snprintf(out, capacity,
+    int n;
+    if (p.web_windows) n = snprintf(out, capacity, "{}");
+    else n = snprintf(out, capacity,
         "{\"supportsCustomResolution\":true,\"supportsHevc\":false,\"supportsHdr\":false,\"supportsFps\":%u,\"maxWidth\":%u,\"maxHeight\":%u,\"maxBitrateKbps\":%u,\"video\":{\"width\":%u,\"height\":%u,\"maxWidth\":%u,\"maxHeight\":%u,\"maxBitrateKbps\":%u}}",
         p.fps, p.width, p.height, p.max_kbps, p.width, p.height,
         p.width, p.height, p.max_kbps);
-    return n >= 0 && (size_t)n < capacity ? n : -1;
+    if (n >= 0 && (size_t)n < capacity) return n;
+    out[0] = 0;
+    return -1;
 }
 
 static inline int x4_stream_profile_dimensions(X4StreamProfile p,
@@ -53,7 +62,9 @@ static inline int x4_stream_profile_dimensions(X4StreamProfile p,
     int n = snprintf(out, capacity,
         "{\"horizontal\":%u,\"vertical\":%u,\"preferredWidth\":%u,\"preferredHeight\":%u,\"safeAreaLeft\":0,\"safeAreaTop\":0,\"safeAreaRight\":%u,\"safeAreaBottom\":%u,\"supportsCustomResolution\":true}",
         p.width, p.height, p.width, p.height, p.width, p.height);
-    return n >= 0 && (size_t)n < capacity ? n : -1;
+    if (n >= 0 && (size_t)n < capacity) return n;
+    out[0] = 0;
+    return -1;
 }
 
 /* Explicit control-plane request used by the Xbox streaming protocol. This

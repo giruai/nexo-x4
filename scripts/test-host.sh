@@ -38,4 +38,16 @@ cppflags=(-O1 -g -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -
 .local/tests/stream_menu assets/psbox/fonts
 "$host_cxx" "${cppflags[@]}" tests/queue_view_test.cpp -o .local/tests/queue_view
 .local/tests/queue_view
+"$host_cc" "${flags[@]}" tests/stream_sdp_bandwidth_test.c src/streaming/stream_sdp_bandwidth.c -o .local/tests/stream_sdp_bandwidth
+.local/tests/stream_sdp_bandwidth
+"$host_cc" "${flags[@]}" -pthread -Itests/audio_stubs tests/live_audio_modes_test.c -o .local/tests/live_audio_modes
+.local/tests/live_audio_modes
+"$host_cc" "${flags[@]}" -msse2 -Itests/decoder_stubs tests/live_h264_test.c src/video/stream_sps.c -o .local/tests/live_h264
+.local/tests/live_h264
+"$host_cc" "${flags[@]}" tests/decode_recovery_test.c -o .local/tests/decode_recovery
+.local/tests/decode_recovery
+"$host_cc" "${flags[@]}" tests/conversion_queue_test.c -o .local/tests/conversion_queue
+.local/tests/conversion_queue
+"$host_cc" "${flags[@]}" -pthread -msse2 -Itests/decoder_stubs tests/live_h264_async_test.c src/video/stream_sps.c -o .local/tests/live_h264_async
+.local/tests/live_h264_async
 printf 'Portable host checks passed. These do not emulate PS4 video hardware.\n'

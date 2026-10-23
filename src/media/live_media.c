@@ -253,7 +253,9 @@ static void reset_au(X4LiveMedia *m, bool gap, unsigned reason, unsigned detail)
     }
     if (gap) {
         if (m->au_open) { m->discard_timestamp = m->timestamp; m->discard_timestamp_valid = true; ++m->dropped_frames; }
-        m->waiting_keyframe = true; atomic_store(&m->keyframe, true);
+        m->waiting_keyframe = true;
+        /* Initial oversized SPS wait has its own 300ms PLI cadence. */
+        if (!m->video.startup_waiting_size) atomic_store(&m->keyframe, true);
     }
     if (m->waiting_keyframe) flags |= 128u;
     x4_trace_record(m->trace, MT_AU_RESET, flags, m->trace_au,
@@ -381,7 +383,7 @@ static void depacketize(X4LiveMedia *m, const X4LiveRtp *r, const X4IngressTicke
     x4_trace_record(m->trace, MT_SUBMIT_BEGIN, m->waiting_keyframe ? 1u : 0u, m->trace_au, m->au_size);
     int rc = x4_live_video_feed(&m->video, m->au, m->au_size, (uint64_t)m->timestamp * 1000000 / 90000);
     x4_trace_record(m->trace, MT_SUBMIT_END, 0, m->trace_au, (uint32_t)rc);
-    if (rc < 0) reset_au(m, true, RESET_FEED, 0);
+    if (rc < 0 || rc == X4_LIVE_VIDEO_WAIT_SIZE) reset_au(m, true, RESET_FEED, 0);
     else {
         if (m->waiting_keyframe) {
             x4_trace_record(m->trace, MT_WAIT_END, 0, m->trace_au, 0);
@@ -467,7 +469,7 @@ int x4_live_media_start(X4LiveMedia *m)
      * native video calls now remain on the same owning thread. */
     while (!atomic_load_explicit(&m->start_complete, memory_order_acquire)) sceKernelUsleep(1000);
     rc = atomic_load(&m->start_result); if (rc < 0) return rc;
-    m->audio = x4_live_audio_start(&m->audio_error, m->audio_payload_type);
+    m->audio = x4_live_audio_start_mode(&m->audio_error, m->audio_payload_type, false);
     m->report_time = sceKernelGetProcessTime(); atomic_store_explicit(&m->started, true, memory_order_release); return 0;
 }
 int x4_live_media_set_payload_type(X4LiveMedia *m, int kind, int pt)
@@ -908,7 +910,7 @@ static void retire_video_counters(X4LiveMedia *m)
 {
 #define ADD(field) m->video_totals.field += m->video.field
     ADD(frames); ADD(decode_calls); ADD(decoded_frames); ADD(no_picture_calls); ADD(decode_us);
-    ADD(convert_us); ADD(copy_calls); ADD(copy_us); ADD(copy_bytes);
+    ADD(convert_us); ADD(conversion_submitted); ADD(conversion_dropped); ADD(copy_calls); ADD(copy_us); ADD(copy_bytes);
     ADD(copy_parallel_calls); ADD(copy_serial_calls); ADD(copy_owner_us); ADD(copy_helper_us);
     ADD(copy_wait_us); ADD(forced_preserve_calls); ADD(copy_check_attempts); ADD(copy_check_pass);
     ADD(copy_check_mismatch); ADD(copy_check_not_checked); ADD(copy_check_bytes); ADD(copy_check_us);
@@ -923,16 +925,15 @@ static void retire_video_counters(X4LiveMedia *m)
  * requested; RTC and Opus continue without interruption. */
 static bool recover_observed_decode_error(X4LiveMedia *m, int slot)
 {
-    if ((uint32_t)m->video.error != X4_DECODE_OBSERVED_ERROR ||
-        strcmp(m->video.stage, "DECODIFICAR JUEGO H264")) return false;
+    if (!x4_decode_recovery_matches(m->video.error, m->video.stage)) return false;
     uint64_t now = sceKernelGetProcessTime();
     if (!x4_decode_recovery_allow(&m->decode_recovery, now)) {
         printf("Nexo X4: video decoder restart budget exhausted error=0x%08x attempts=%u\n",
             (unsigned)m->video.error, m->decode_recovery.attempts);
         return false;
     }
-    printf("Nexo X4: video decoder restart begin error=0x%08x attempt=%u/%u\n",
-        (unsigned)m->video.error, m->decode_recovery.attempts, X4_DECODE_RECOVERY_MAX);
+    printf("Nexo X4: video decoder restart begin reason=%s error=0x%08x attempt=%u/%u\n",
+        m->video.error == X4_SPS_CHANGED ? "parsed-SPS-change" : "native-Decode", (unsigned)m->video.error, m->decode_recovery.attempts, X4_DECODE_RECOVERY_MAX);
     int rc = x4_live_video_stop(&m->video);
     if (rc < 0) {
         printf("Nexo X4: video decoder restart stop failed rc=0x%08x\n", (unsigned)rc);
@@ -943,7 +944,7 @@ static bool recover_observed_decode_error(X4LiveMedia *m, int slot)
     x4_live_reorder_reset(&m->reorder);
     memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
     m->sps_size = m->pps_size = 0;
-    rc = x4_live_video_start(&m->video, m->rgb[slot].pixels,
+    rc = x4_live_video_start(&m->video, m->rgb[slot >= 0 ? slot : 0].pixels,
         m->rgb_capacity);
     if (rc < 0) {
         printf("Nexo X4: video decoder restart start failed rc=0x%08x\n", (unsigned)rc);
@@ -966,6 +967,8 @@ static void prepare_worker_view(X4LiveMedia *m, X4LiveMediaSnapshot *out)
     s.video_decode_us = t->decode_us + v->decode_us;
     s.video_decode_max_us = v->decode_max_us > t->decode_max_us ? v->decode_max_us : t->decode_max_us;
     s.video_convert_us = t->convert_us + v->convert_us;
+    s.video_conversion_submitted = t->conversion_submitted + v->conversion_submitted;
+    s.video_conversion_dropped = t->conversion_dropped + v->conversion_dropped;
     s.video_convert_max_us = v->convert_max_us > t->convert_max_us ? v->convert_max_us : t->convert_max_us;
     s.video_copy_calls = t->copy_calls + v->copy_calls; s.video_copy_us = t->copy_us + v->copy_us;
     s.video_copy_max_us = v->copy_max_us > t->copy_max_us ? v->copy_max_us : t->copy_max_us;
@@ -1007,6 +1010,7 @@ static void commit_worker_view(X4LiveMedia *m, X4LiveMediaSnapshot *s)
 static void publish_worker_view(X4LiveMedia *m)
 {
     X4LiveMediaSnapshot s;
+    x4_live_video_collect(&m->video, 0);
     prepare_worker_view(m, &s);
     x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_MAILBOX, 0);
     mailbox_lock(m);
@@ -1019,10 +1023,45 @@ static int reserve_rgb(X4LiveMedia *m)
     int slot = -1;
     mailbox_lock(m);
     for (int i = 0; i < RGB_SLOTS; ++i)
-        if (i != m->published_slot && i != m->reader_slot) { slot = i; break; }
+        if (i != m->published_slot && i != m->reader_slot && i != m->writer_slot) { slot = i; break; }
     m->writer_slot = slot;
     mailbox_unlock(m);
     return slot;
+}
+/* Only the converter uses these callbacks in the 1080 session. All shared
+ * RGB metadata is under mailbox_gate; decoder counters remain owner-only. */
+static uint32_t *converter_acquire_rgb(void *context, size_t pixels)
+{
+    X4LiveMedia *m = context;
+    if (pixels > m->rgb_capacity) return NULL;
+    int slot = reserve_rgb(m);
+    return slot >= 0 ? m->rgb[slot].pixels : NULL;
+}
+static void converter_publish_rgb(void *context, unsigned width, unsigned height,
+    uint64_t output, uint64_t completed)
+{
+    X4LiveMedia *m = context;
+    uint64_t superseded = 0, generation = 0;
+    mailbox_lock(m);
+    int slot = m->writer_slot;
+    if (slot >= 0) {
+        if (m->published_slot >= 0 && m->published_slot != m->reader_slot &&
+            m->rgb[m->published_slot].generation > m->last_draw_frame) {
+            ++m->publication_superseded; superseded = m->rgb[m->published_slot].generation;
+        }
+        RgbSlot *rgb = &m->rgb[slot];
+        rgb->width = width; rgb->height = height;
+        rgb->generation = generation = ++m->publication_generation;
+        rgb->completed_us = completed; rgb->native_output = output;
+        m->published_slot = slot; m->writer_slot = -1;
+        m->worker_view.width = width; m->worker_view.height = height;
+        m->worker_view.video_ready = true;
+        m->worker_view.video_publications = m->worker_view.video_publication_generation = generation;
+        m->worker_view.video_publication_superseded = m->publication_superseded;
+    }
+    mailbox_unlock(m);
+    if (superseded) x4_trace_record(m->trace, MT_SUPERSEDE, 0, superseded, generation);
+    if (generation) x4_trace_record(m->trace, MT_PUBLISH, 0, generation, output);
 }
 static void finish_rgb(X4LiveMedia *m, int slot, bool converted)
 {
@@ -1055,6 +1094,7 @@ static void finish_rgb(X4LiveMedia *m, int slot, bool converted)
 static void reset_worker_maxima(X4LiveMedia *m)
 {
     if (!atomic_exchange(&m->reset_maxima, false)) return;
+    x4_live_video_collect(&m->video, 1);
     m->tick_max_us = m->queue_age_max_us = 0;
     m->video.decode_max_us = m->video.copy_max_us = m->video.convert_max_us = m->video.picture_gap_max_us = 0;
     m->video_totals.decode_max_us = m->video_totals.copy_max_us = m->video_totals.convert_max_us = m->video_totals.picture_gap_max_us = 0;
@@ -1120,7 +1160,7 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
     printf("Nexo X4: video perf interval_us=%llu tick=%llu packets=%llu tick_us=%llu tick_max_us=%llu "
         "decode=%llu pictures=%llu no_picture=%llu decode_us=%llu decode_max_us=%llu "
         "copy=%llu copy_us=%llu copy_max_us=%llu copy_bytes=%llu "
-        "convert=%llu convert_us=%llu convert_max_us=%llu picture_age_us=%llu picture_gap_max_us=%llu\n",
+        "convert=%llu convert_us=%llu convert_max_us=%llu async_jobs=%llu async_drop=%llu picture_age_us=%llu picture_gap_max_us=%llu\n",
         (unsigned long long)(now - m->report_time),
         (unsigned long long)(s.video_tick_calls - p->video_tick_calls),
         (unsigned long long)(s.video_tick_packets - p->video_tick_packets),
@@ -1134,6 +1174,8 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
         (unsigned long long)(s.video_copy_bytes - p->video_copy_bytes),
         (unsigned long long)(s.video_frames - p->video_frames),
         (unsigned long long)(s.video_convert_us - p->video_convert_us), (unsigned long long)s.video_convert_max_us,
+        (unsigned long long)(s.video_conversion_submitted - p->video_conversion_submitted),
+        (unsigned long long)(s.video_conversion_dropped - p->video_conversion_dropped),
         (unsigned long long)s.video_picture_age_us, (unsigned long long)s.video_picture_gap_max_us);
     printf("Nexo X4: video render draw=%llu new=%llu repeat=%llu draw_us=%llu draw_max_us=%llu "
         "present=%llu present_us=%llu present_max_us=%llu queue_depth=%u highwater=%u full=%llu "
@@ -1187,11 +1229,12 @@ static void video_batch(X4LiveMedia *m)
 {
     m->diagnostic_worker_phase = X4_MON_PHASE_WAIT_SURFACE;
     x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_WAIT_SURFACE, 0);
-    int slot = reserve_rgb(m);
-    if (slot < 0) return;
+    bool asynchronous = m->video.sink.acquire != NULL;
+    int slot = asynchronous ? -1 : reserve_rgb(m);
+    if (!asynchronous && slot < 0) return;
     m->diagnostic_worker_phase = X4_MON_PHASE_ASSEMBLE;
     x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_ASSEMBLE, 0);
-    if (x4_live_video_set_target(&m->video, m->rgb[slot].pixels, m->rgb_capacity) < 0) {
+    if (!asynchronous && x4_live_video_set_target(&m->video, m->rgb[slot].pixels, m->rgb_capacity) < 0) {
         m->video.error = X4_LIVE_ERR_DECODER; finish_rgb(m, slot, false); return;
     }
     uint64_t begin = sceKernelGetProcessTime(), decode_begin = m->video.decode_calls;
@@ -1250,7 +1293,7 @@ static void video_batch(X4LiveMedia *m)
             if (locked) {
                 int rc = x4_live_video_stop(&m->video); if (rc < 0) goto finish;
                 retire_video_counters(m);
-                if (x4_live_video_start(&m->video, m->rgb[slot].pixels, m->rgb_capacity) < 0) goto finish;
+                if (x4_live_video_start(&m->video, m->rgb[slot >= 0 ? slot : 0].pixels, m->rgb_capacity) < 0) goto finish;
                 decode_begin = frame_begin = 0;
             }
         }
@@ -1340,7 +1383,8 @@ finish:
     if (elapsed > m->tick_max_us) m->tick_max_us = elapsed;
     x4_trace_record(m->trace, MT_YIELD, X4_TRACE_REASON(m->trace_budget_reason),
         decoded_this_batch, elapsed);
-    finish_rgb(m, slot, converted);
+    if (asynchronous) publish_worker_view(m);
+    else finish_rgb(m, slot, converted);
 }
 static void *video_worker(void *context)
 {
@@ -1349,6 +1393,8 @@ static void *video_worker(void *context)
     x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_STARTUP, 0);
     x4_trace_record(m->trace, MT_WORKER_START, 0, X4_LIVE_COPY_READERS, WORKER_BUDGET_US);
     x4_trace_record(m->trace, MT_WAIT_BEGIN, 0x8000u, 0, 0);
+    if (m->video.stream_profile == X4_STREAM_1080)
+        m->video.sink = (X4LiveVideoSink){m, converter_acquire_rgb, converter_publish_rgb};
     int rc = x4_live_video_start(&m->video, m->rgb[0].pixels, m->rgb_capacity);
     publish_worker_view(m);
     atomic_store(&m->start_result, rc);
@@ -1358,6 +1404,9 @@ static void *video_worker(void *context)
     while (rc >= 0 && !atomic_load(&m->stop)) {
         x4_trace_poll(m->trace);
         reset_worker_maxima(m);
+        /* Deadline and retry cadence run even if RTP stops during initial
+         * oversized resolution admission. A local PLI is not a server ACK. */
+        if (x4_live_video_poll_startup(&m->video) > 0) atomic_store(&m->keyframe, true);
         /* Independently evaluate absolute grace expiry on the existing
          * worker cadence, including empty ingress and no new reception. */
         if(m->track.locked) (void)grace_query(m,0);

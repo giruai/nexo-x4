@@ -50,17 +50,6 @@
 #define X4_SESSION_STEP_USEC 100000u
 #define X4_SESSION_ID_MAX 128u
 #define X4_SESSION_PREFIX "v5/sessions/cloud/"
-/* Play request: settings fields as described by GreenVita's web dialect
- * (sdkType "web", nanoVersion), with this device's own osName and the
- * default service locale; timezoneOffsetMinutes follows JS getTimezoneOffset for
- * UTC-6 (Mexico City). No other field is guessed. */
-#define X4_SESSION_PLAY_HEAD "{\"clientSessionId\":\"\",\"titleId\":\""
-#define X4_SESSION_PLAY_TAIL "\",\"systemUpdateGroup\":\"\",\"settings\":{" \
-    "\"nanoVersion\":\"V3;WebrtcTransport.dll\",\"enableOptionalDataCollection\":false," \
-    "\"enableTextToSpeech\":false,\"highContrast\":0,\"locale\":\"es-MX\",\"useIceConnection\":false," \
-    "\"timezoneOffsetMinutes\":360,\"sdkType\":\"web\",\"osName\":\"Orbis\"}," \
-    "\"serverId\":\"\",\"fallbackRegionNames\":[]}"
-
 static const struct { const char *id, *url, *stage; } offerings[] = {
     {"xgpuweb", "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user", "credenciales de Xbox Cloud Gaming"},
     {"xgpuwebf2p", "https://xgpuwebf2p.gssv-play-prod.xboxlive.com/v2/login/user", "credenciales de juegos gratuitos"},
@@ -541,7 +530,7 @@ static int titles(X4XboxWork *w)
     const X4HttpHeader headers[] = {
         {"Authorization", w->authorization},
         {"x-gssv-client", "XboxComBrowser"},
-        {"X-MS-Device-Info", X4_XBOX_DEVICE_INFO},
+        {"X-MS-Device-Info", x4_xbox_device_info(w->stream_profile)},
     };
     TitleGet request = {w, headers, sizeof(headers) / sizeof(headers[0])};
     X4CatalogSnapshot *r = &w->result;
@@ -867,7 +856,7 @@ static int session_call(X4XboxWork *w, enum X4HttpSessionMethod method, const ch
     const X4HttpHeader headers[] = {
         {"Authorization", w->authorization},
         {"x-gssv-client", "XboxComBrowser"},
-        {"X-MS-Device-Info", X4_XBOX_DEVICE_INFO},
+        {"X-MS-Device-Info", x4_xbox_device_info(w->stream_profile)},
     };
     *length = 0;
     *status = 0;
@@ -942,7 +931,7 @@ static void session_queue_estimate(X4XboxWork *w, uint64_t now, uint64_t deadlin
     const X4HttpHeader headers[] = {
         {"Authorization", w->authorization},
         {"x-gssv-client", "XboxComBrowser"},
-        {"X-MS-Device-Info", X4_XBOX_DEVICE_INFO},
+        {"X-MS-Device-Info", x4_xbox_device_info(w->stream_profile)},
     };
     size_t length = 0;
     int status = 0;
@@ -973,10 +962,10 @@ static void session_auth_failed(X4XboxWork *w)
  * published for 0 and -1. */
 static int session_create(X4XboxWork *w, const X4CatalogTitle *title)
 {
-    size_t used = 0, length = 0;
+    size_t length = 0;
     int status = 0;
     session_state(w, X4_SESSION_STARTING, "solicitando sesion en la nube", 0);
-    if (!put(w, &used, X4_SESSION_PLAY_HEAD) || !put(w, &used, title->id) || !put(w, &used, X4_SESSION_PLAY_TAIL) ||
+    if (x4_xbox_play_body(w->stream_profile, title->id, w->request, sizeof(w->request)) < 0 ||
         !session_url(w, "play", "")) {
         x4_secure_clear(w->request, sizeof(w->request));
         session_end(w, X4_SESSION_ERROR, X4_AUTH_E_FORM, 0, "solicitud de sesion");

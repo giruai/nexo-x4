@@ -92,6 +92,7 @@ int main(void)
 {
     /* Auth restoration can start a logging worker during x4_auth_create. */
     setvbuf(stdout, NULL, _IONBF, 0);
+    int session_video_profile = X4_STREAM_720;
     X4Display display;
     X4Controller controller;
     X4Screen screen = {0};
@@ -704,6 +705,7 @@ reopen_interface:;
 #if X4_PSBOX_UI
                         selected_profile = x4_psbox_stream_profile(psbox);
 #endif
+                        session_video_profile = selected_profile;
                         live_error = x4_auth_set_stream_profile(auth, selected_profile);
                         if (!live_error) live = x4_live_media_create_profile(selected_profile, &live_error);
                         x4_bitrate_init_profile(&bitrate_control, input_at, selected_profile);
@@ -988,6 +990,9 @@ reopen_interface:;
                 render_report_at = present_begin; render_total_us = render_max_us = render_frames = 0;
             }
         }
+        /* Session-captured profile; changes in Options apply on the next session.
+         * HSYNC may tear, but never bypasses the existing buffer release wait. */
+        x4_display_stream_low_latency(&display, drew_live && session_video_profile == X4_STREAM_1080);
         rc = drew_live && trace_active ?
             x4_display_present_trace(&display, live_trace, drawn_generation, drawn_fresh) :
             x4_display_present(&display);

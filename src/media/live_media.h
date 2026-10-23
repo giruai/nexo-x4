@@ -43,6 +43,7 @@ typedef struct {
      * Worker maxima reset when it acknowledges the last report boundary. */
     uint64_t video_decode_calls, video_decoded_frames, video_no_picture_calls;
     uint64_t video_decode_us, video_decode_max_us, video_convert_us, video_convert_max_us;
+    uint64_t video_conversion_submitted, video_conversion_dropped;
     uint64_t video_copy_calls, video_copy_us, video_copy_max_us, video_copy_bytes;
     uint64_t video_copy_parallel_calls, video_copy_serial_calls, video_copy_owner_us, video_copy_helper_us;
     uint64_t video_copy_wait_us, video_copy_wait_max_us, video_forced_preserve_calls;

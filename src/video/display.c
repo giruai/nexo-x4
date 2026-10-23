@@ -48,7 +48,8 @@ static int present(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh
     x4_trace_record(trace, X4_TRACE_FLIP_CALL_BEGIN, flags, generation, submitted);
     int rc = x4_gpu_gnm_enter();
     if (rc != 0) return -1;
-    rc = sceVideoOutSubmitFlip(d->handle, d->index, ORBIS_VIDEO_OUT_FLIP_VSYNC, d->frame);
+    rc = sceVideoOutSubmitFlip(d->handle, d->index,
+        d->low_latency_stream ? ORBIS_VIDEO_OUT_FLIP_HSYNC : ORBIS_VIDEO_OUT_FLIP_VSYNC, d->frame);
     if (rc < 0) {
         x4_gpu_gnm_leave();
         x4_trace_record(trace, X4_TRACE_FLIP_FAIL, flags | X4_TRACE_REASON(X4_TRACE_R_SUBMIT),
@@ -97,6 +98,15 @@ int x4_display_present(X4Display *d) { return present(d, NULL, 0, false); }
 int x4_display_present_trace(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh)
 {
     return present(d, trace, generation, fresh);
+}
+void x4_display_stream_low_latency(X4Display *d, bool enabled)
+{
+    if (!d) return;
+    int mode = enabled ? 1 : 0;
+    if (d->low_latency_stream != mode)
+        printf("Nexo X4: presentation mode=%s (buffer ownership wait retained)\n",
+            mode ? "HSYNC experimental; tearing possible" : "VSYNC");
+    d->low_latency_stream = mode;
 }
 void x4_display_close(X4Display *d)
 {

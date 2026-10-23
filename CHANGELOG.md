@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.9 — stable release · PS4 APP_VER 01.41
+
+- Correct observed 720p H.264 level 32→42 transitions without increasing the selected resolution limit: native admission uses the tested level 42 ceiling independently of the requested SDP level. DPB, geometry, crop and memory bounds remain enforced.
+- Copy each1080p native output into a bounded, independently owned WB staging queue and convert on a separate CPU worker. Keep native Decode/copy/teardown on its owner and decoder depth 1.
+- Publish RGB through existing reader/writer leases; replace queued old frames without recycling active buffers. Join the converter before restart/free and retain storage after uncertain teardown.
+- Add async job/drop measurements, per-output ownership fixtures and exact720p SPS transition regression tests. Preserve UI, audio, input and saved sign-in.
+
+Portable tests and native build do not establish60 FPS. Hardware validation of this candidate is pending; no public release is implied.
+
+## 0.1.8 — local diagnostic build · PS4 APP_VER 01.40
+
+Added rejection-only scalar SPS fields. Hardware identified the720 failure as level 42 arriving within unchanged1280×720 geometry after level 32. Guards were unchanged in this diagnostic build.
+
+## 0.1.7 — SPS recovery candidate · PS4 APP_VER 01.39
+
+- Add recovery for a hardware-observed 720p regression: a valid changed SPS invokes bounded owner-thread decoder teardown/restart and a fresh keyframe request instead of cancelling the cloud session. Invalid SPS and unsafe teardown still fail safely.
+- Retain the 0.1.6 negotiation, audio and presentation changes.
+
+0.1.6 demonstrated actual 1920×1080 on PS4, but native presentation was around 30 FPS and its 720p session failed after a parameter change. 0.1.7 hardware testing confirmed actual 1080p but did not sustain 60 FPS;720p still failed native level admission after restart.0.1.8 identified that separate cause.
+
+## 0.1.6 — development candidate · PS4 APP_VER 01.38
+
+- Adapt XCloud4 G8 web/Windows negotiation for experimental 1080p, with video SDP capped at 8 Mbps and adaptive requests within 5–8 Mbps. Keep the native 720p profile.
+- Validate H.264 SPS and coded versus visible dimensions before creating the decoder; handle coded 1088-line storage for visible 1080p.
+- Use HSYNC presentation only for the experimental 1080p session; keep VSync for 720p and UI. HSYNC may show tearing.
+- Add adaptive audio with 512-sample output and a 1024-sample fallback.
+- Preserve PSBox UI, six languages, stored sign-in renewal, game text, input mapping, diagnostics and ABR.
+
+Hardware validation is pending. These changes request 1080p and target 60 FPS; neither is guaranteed. Decoder depth remains 1 because input buffer retirement for upstream depth 2 is not independently established.
+
 ## 0.1.5 — beta candidate · PS4 APP_VER 01.37
 
 - Add local game-text entry and safe Xbox transaction completion/cancellation; Fortnite search tested through to results.

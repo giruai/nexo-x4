@@ -1,6 +1,6 @@
 # Privacy and local-data notice
 
-This describes the Nexo X4 client source in this repository and its current local 0.1.3 candidate. The first published release is v0.1.0; behavior can differ between versions. It does not describe all data collected by Microsoft, game publishers, Sony, a modified build, or the network and device used to run it. See the [Microsoft Privacy Statement](https://www.microsoft.com/en-us/privacy/privacystatement) for Microsoft's separate practices.
+This describes the Nexo X4 client source in this repository in release 0.1.9. The first published release is v0.1.0; behavior can differ between versions. It does not describe all data collected by Microsoft, game publishers, Sony, a modified build, or the network and device used to run it. See the [Microsoft Privacy Statement](https://www.microsoft.com/en-us/privacy/privacystatement) for Microsoft's separate practices.
 
 ## Sign-in and cloud traffic
 
@@ -22,6 +22,10 @@ The Options **Diagnostics** switch defaults off. Enabling it adds bounded numeri
 
 Static inspection of the client source found **no Nexo-owned analytics or telemetry upload endpoint**. This is a bounded statement about this source, not a promise about Microsoft, Google STUN, game publishers, the PS4 environment, or modified builds. Nexo X4 does not intentionally write typed game text, passwords, or token values to its diagnostic files or logs; unexpected platform or third-party logging is outside this source-level assessment.
 
-### Experimental in-game text entry
+### In-game text entry
 
 The local keyboard temporarily holds the game's prompt, default value and entered text in memory to answer its Xbox virtual-keyboard transaction. Text is sent to the active Xbox session only; it is not written to preferences, account storage or diagnostic logs. Password-scope requests are cancelled. Buffers are cleared on completion, cancellation and teardown. Screenshots or recordings can still expose visible game/account information; test captures belong outside the repository and release assets.
+
+## 1080p compatibility profile
+
+Only the 1080p session advertises a Windows/Chrome browser dialect and a 4096×2160 display to match the upstream G8 protocol request. These are fixed public compatibility values, not identifiers read from the player's computer or console. They do not indicate actual 4K decode support. The 720p profile retains the native PS4/Orbis identity. No new tracking, update-check endpoint or upload is introduced by this integration.

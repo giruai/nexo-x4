@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "rtc_transport.h"
 #include "rtc_native.h"
+#include "stream_sdp_bandwidth.h"
 #include "rtc_receive_diag.h"
 #include "nack_grace_inbox.h"
 #include "../input/rumble.h"
@@ -855,6 +856,11 @@ int x4_rtc_local_description(X4Rtc *rtc,char *sdp,size_t capacity)
     if(rc!=required||rc<1||(size_t)rc>capacity||sdp[rc-1]||strnlen(sdp,(size_t)rc)!=(size_t)rc-1) {
         memset(sdp,0,capacity);
         return rc<0?rc:-40;
+    }
+    if (rtc->profile.video_sdp_kbps) {
+        int bandwidth_rc = x4_stream_sdp_limit_video(sdp, capacity, rtc->profile.video_sdp_kbps);
+        if (bandwidth_rc < 0) { sdp[0] = 0; return bandwidth_rc; }
+        rc = (int)strlen(sdp) + 1;
     }
     if(!atomic_exchange(&rtc->offer_logged,true)) {
         sdp_shape_log(sdp,(size_t)rc-1);

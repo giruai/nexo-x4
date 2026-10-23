@@ -4,6 +4,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
+#include "../video/stream_sps.h"
 
 /* Bounded restarts for one observed native Decode failure. The numerical
  * code's SDK meaning is unknown; callers must also verify the Decode stage. */
@@ -15,6 +17,16 @@ typedef struct {
     uint64_t window_begin_us;
     unsigned attempts;
 } X4DecodeRecoveryPolicy;
+
+/* Only parsed SPS contract changes and the previously observed Decode error
+ * may use the owner-thread teardown/restart path. Malformed SPS is fatal. */
+static inline bool x4_decode_recovery_matches(int error, const char *stage)
+{
+    if (!stage) return false;
+    return ((uint32_t)error == X4_DECODE_OBSERVED_ERROR &&
+            !strcmp(stage, "DECODIFICAR JUEGO H264")) ||
+        (error == X4_SPS_CHANGED && !strcmp(stage, "SPS H264 CAMBIADO"));
+}
 
 static inline bool x4_decode_recovery_allow(X4DecodeRecoveryPolicy *p, uint64_t now_us)
 {

@@ -1,8 +1,10 @@
 #include "../streaming/stream_profile.h"
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_h264.h"
+#include "stream_sps.h"
 #include "videodec2_abi.h"
 #include "gpu_readback.h"
+#include "conversion_queue.h"
 #include "../core/module.h"
 #include <orbis/libkernel.h>
 #include <stdio.h>
@@ -15,7 +17,7 @@
 #include <smmintrin.h>
 
 enum { RING = 4, INPUT_RING = 2, MAX_MEMORY = 64 * 1024 * 1024,
-    COPY_HELPERS = X4_LIVE_COPY_READERS - 1 };
+    COPY_HELPERS = X4_LIVE_COPY_READERS - 1, MAX_H264_LEVEL = 42 };
 /* VIDEO trace namespace. IDs identify observed calls/leased outputs, never
  * correlate the current input PTS/AU with a returned native picture. */
 enum {
@@ -62,7 +64,10 @@ struct VideoState {
     int32_t (*Decode)(void *, const OrbisVideodec2InputData *, OrbisVideodec2FrameBuffer *, OrbisVideodec2OutputInfo *);
     int32_t (*Flush)(void *, OrbisVideodec2FrameBuffer *, OrbisVideodec2OutputInfo *);
     void *queue, *decoder;
+    bool decoder_creation_uncertain;
     unsigned max_width, max_height;
+    X4StreamSps sps;
+    uint64_t startup_size_begin_us, startup_size_pli_us;
     Memory compute, cpu, gpu, shared, input[INPUT_RING], output[RING];
     size_t frame_size;
     unsigned input_slot, slot;
@@ -81,7 +86,29 @@ struct VideoState {
     uint64_t copy_sequence;
     X4GpuReadback *gpu_readback;
     bool gpu_readback_checked;
+    /* Native owner copies to COPYING slots; CPU worker consumes READY slots.
+     * Every slot retains its allocation until successful converter join. */
+    X4ConversionQueue conversion_queue;
+    atomic_flag conversion_gate;
+    atomic_bool conversion_stop;
+    OrbisPthread conversion_thread;
+    bool conversion_running;
+    int conversion_join_error;
+    X4LiveVideoSink sink;
+    struct {
+        void *allocation;
+        uint8_t *nv12;
+        unsigned width, height, pitch, storage_height;
+        uint64_t output;
+    } conversion_jobs[X4_CONVERSION_SLOTS];
+    uint64_t converted, conversion_submitted, conversion_dropped;
+    uint64_t conversion_us, conversion_max_us, conversion_gap_max_us;
+    uint64_t conversion_completed_us, converted_output;
+    unsigned converted_width, converted_height;
 };
+static int stop_conversion(VideoState *s);
+static int submit_conversion(X4LiveVideo *v, VideoState *s);
+
 
 static void *copy_worker(void *context);
 
@@ -170,12 +197,18 @@ int x4_live_video_stop(X4LiveVideo *v)
     x4_trace_record(v->trace, VT_STOP, 0, v->trace_decoder_epoch, 0);
     /* A failed join leaves the helper lifetime unknown. Never retry native
      * deletion or release its source/staging while that lifetime is unknown. */
+    int conversion_rc = stop_conversion(s);
+    if (conversion_rc < 0) return stage(v, "CERRAR CONVERSION CPU", conversion_rc);
+    x4_live_video_collect(v, 0);
     int helper_rc = stop_copy_helpers(s);
     if (helper_rc < 0) return stage(v, "CERRAR COPIA CPU", helper_rc);
     /* A timed-out GPU read still owns the native source. Retain the decoder,
      * output ring and all DMA storage until completion is proven. */
     int gpu_rc = x4_gpu_readback_close(&s->gpu_readback);
     if (gpu_rc < 0) return stage(v, "CERRAR COPIA GPU", gpu_rc);
+    /* A successful create without its handle cannot prove native ownership
+     * ended. Retain all reservations; no guessed Delete(NULL) is safe. */
+    if (s->decoder_creation_uncertain) return stage(v, "HANDLE DECODER DESCONOCIDO", -7);
     /* Do not free buffers still owned by the decoder if teardown fails. */
     if (s->decoder) {
         int rc = s->DeleteDecoder(s->decoder);
@@ -199,6 +232,7 @@ int x4_live_video_stop(X4LiveVideo *v)
     for (unsigned i = 0; i < sizeof(remaining) / sizeof(*remaining); ++i) {
         int rc = release(remaining[i]); if (rc < 0) return stage(v, "LIBERAR MEMORIA", rc);
     }
+    for (unsigned i = 0; i < X4_CONVERSION_SLOTS; ++i) free(s->conversion_jobs[i].allocation);
     free(s->staging_allocation); s->staging_allocation = NULL; s->staging = NULL;
     /* RGB mailbox storage belongs to media and survives teardown failure. */
     v->pixels = NULL;
@@ -209,6 +243,7 @@ int x4_live_video_stop(X4LiveVideo *v)
 int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
 {
     if (!v || !pixels || !x4_stream_profile_valid(v->stream_profile)) return -7;
+    if ((v->sink.acquire == NULL) != (v->sink.publish == NULL)) return -7;
     X4StreamProfile profile = x4_stream_profile_get(v->stream_profile);
     if (pixel_capacity < (size_t)profile.width * profile.height) return -7;
     if (v->state) { int rc = x4_live_video_stop(v); if (rc < 0) return rc; }
@@ -218,8 +253,9 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     uint64_t decode_id = v->trace_decode_next, output_id = v->trace_output_next;
     uint64_t copy_id = v->trace_copy_next, epoch = v->trace_decoder_epoch + 1;
     int stream_profile = v->stream_profile;
+    X4LiveVideoSink sink = v->sink;
     memset(v, 0, sizeof(*v));
-    v->stream_profile = stream_profile;
+    v->stream_profile = stream_profile; v->sink = sink;
     v->trace = trace; v->trace_decode_next = decode_id; v->trace_output_next = output_id;
     v->trace_copy_next = copy_id; v->trace_decoder_epoch = epoch;
     x4_trace_record(trace, VT_START, 0, epoch, 0);
@@ -233,6 +269,9 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
         atomic_init(&helper->completed, 0);
     }
     v->state = s;
+    s->sink = sink;
+    atomic_flag_clear(&s->conversion_gate);
+    atomic_init(&s->conversion_stop, false);
     s->max_width = profile.width; s->max_height = profile.height;
     s->trace = trace;
     int handle = x4_module_open("libSceVideodec2"), rc = handle;
@@ -257,14 +296,70 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     OrbisVideodec2ComputeConfigInfo cc = {.thisSize = sizeof(cc), .computePipeId = 0, .computeQueueId = 0};
     rc = s->AllocateComputeQueue(&cc, &cm, &s->queue);
     if (stage(v, "CREAR COLA", rc) < 0) goto fail;
+    /* SPS controls native profile, coded geometry and DPB. Media prepends the
+     * validated cached SPS/PPS to its first IDR; create only when they arrive. */
+    v->pixels = pixels;
+    stage(v, "ESPERANDO SPS H264", 0);
+    return 0;
+fail:
+    x4_live_video_stop(v);
+    return rc;
+}
+
+/* The installed native ABI exposes no input completion token. Keep depth one
+ * and its existing two persistent inputs; upstream's depth-two three-return
+ * retirement rule is explicitly an unverified caller assumption. */
+static int configure_decoder(X4LiveVideo *v, const X4StreamSps *sps)
+{
+    VideoState *s = v->state;
+    int rc;
+    bool level_known = false;
+    unsigned capacity = x4_stream_sps_level_dpb_capacity(sps->level_idc,
+        sps->constraints, sps->coded_width, sps->coded_height, &level_known);
+    /* Native admission is separate from the requested SDP level: Xbox was
+     * observed changing 720p from level32 to42 without changing its geometry.
+     * Admit only known levels through the same tested native42 ceiling used
+     * for1080, while retaining session dimensions, DPB and memory bounds.
+     * Restrict crop to bottom padding: output has no per-plane/crop metadata. */
+    unsigned dpb = sps->max_dec_frame_buffering;
+    unsigned minimum = sps->max_num_ref_frames + 1;
+    if (minimum < 4) minimum = 4;
+    if (dpb < minimum) dpb = minimum;
+    unsigned reject = 0;
+    if (sps->profile_idc != 66 && sps->profile_idc != 77 && sps->profile_idc != 100) reject |= 1u;
+    if (!level_known || sps->level_idc > MAX_H264_LEVEL) reject |= 2u;
+    if (sps->visible_width > s->max_width || sps->visible_height > s->max_height) reject |= 4u;
+    if ((sps->visible_width & 1) || (sps->visible_height & 1)) reject |= 8u;
+    if (sps->crop_left || sps->crop_top || sps->crop_right ||
+        (sps->crop_bottom && !(sps->coded_width == 1920 && sps->coded_height == 1088 &&
+            sps->visible_height == 1080 && sps->crop_bottom == 8))) reject |= 16u;
+    if (!capacity || dpb > capacity || sps->max_num_ref_frames > capacity) reject |= 32u;
+    if (sps->max_num_ref_frames > sps->max_dec_frame_buffering) reject |= 64u;
+    if (sps->num_reorder_frames > sps->max_dec_frame_buffering) reject |= 128u;
+    if (!sps->max_dec_frame_buffering || sps->max_dec_frame_buffering > capacity) reject |= 256u;
+    if (reject) {
+        /* Rejection-only bounded scalar diagnostics. No bitstream or account data. */
+        printf("Nexo X4: SPS reject mask=%u selected=%d limit=%ux%u profile=%u constraints=%u level=%u level_known=%u coded=%ux%u visible=%ux%u crop=%u,%u,%u,%u refs=%u signalled_dpb=%u reorder=%u dpb_source=%u effective_dpb=%u capacity=%u\n",
+            reject, v->stream_profile, s->max_width, s->max_height,
+            sps->profile_idc, sps->constraints, sps->level_idc, (unsigned)level_known,
+            sps->coded_width, sps->coded_height, sps->visible_width, sps->visible_height,
+            sps->crop_left, sps->crop_top, sps->crop_right, sps->crop_bottom,
+            sps->max_num_ref_frames, sps->max_dec_frame_buffering, sps->num_reorder_frames,
+            sps->dpb_source, dpb, capacity);
+        return stage(v, "SPS FUERA DE CONTRATO", X4_SPS_LEVEL_DPB);
+    }
+    s->sps = *sps;
     OrbisVideodec2DecoderConfigInfo config = {
         .thisSize = sizeof(config), .resourceType = 1, .codecType = 1,
-        .profile = 66, .maxLevel = profile.h264_level, .maxFrameWidth = profile.width,
-        .maxFrameHeight = profile.height, .maxDpbFrameCount = 4,
+        .profile = sps->profile_idc, .maxLevel = sps->level_idc, .maxFrameWidth = sps->coded_width,
+        .maxFrameHeight = sps->coded_height, .maxDpbFrameCount = dpb,
         .decodePipelineDepth = 1, .computeQueue = s->queue,
         .cpuAffinityMask = 0x3f, .cpuThreadPriority = 700,
         .optimizeProgressiveVideo = true, .checkMemoryType = false
     };
+    printf("Nexo X4: SPS video profile=%u level=%u coded=%ux%u visible=%ux%u refs=%u dpb=%u depth=1\n",
+        sps->profile_idc, sps->level_idc, sps->coded_width, sps->coded_height,
+        sps->visible_width, sps->visible_height, sps->max_num_ref_frames, dpb);
     OrbisVideodec2DecoderMemoryInfo memory = {.thisSize = sizeof(memory)};
     rc = s->QueryDecoderMemoryInfo(&config, &memory);
     if (stage(v, "MEMORIA DECODER", rc) < 0) goto fail;
@@ -275,6 +370,23 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
         memory.cpuGpuMemorySize > MAX_MEMORY || !memory.maxFrameBufferSize || memory.maxFrameBufferSize > MAX_MEMORY / RING) {
         rc = stage(v, "LIMITES MEMORIA", -6); goto fail;
     }
+    /* Bound the aggregate aligned native reservations, not only each block.
+     * Query reports coded storage; reject an undersized frame before Create. */
+    size_t native_bytes = s->compute.size;
+    size_t block_sizes[] = {memory.cpuMemorySize, memory.gpuMemorySize, memory.cpuGpuMemorySize};
+    for (unsigned i = 0; i < INPUT_RING; ++i) native_bytes += s->input[i].size;
+    for (unsigned i = 0; i < 3; ++i) native_bytes += (block_sizes[i] + 0x3fff) & ~(size_t)0x3fff;
+    size_t frame_align = memory.frameBufferAlignment;
+    if (frame_align < 0x4000) frame_align = 0x4000;
+    if (frame_align > 0x200000 || (frame_align & (frame_align - 1))) {
+        rc = stage(v, "ALINEACION DECODER", -6); goto fail;
+    }
+    native_bytes += RING * ((memory.maxFrameBufferSize + frame_align - 1) & ~(frame_align - 1));
+    if (native_bytes > 128u * 1024u * 1024u ||
+        memory.maxFrameBufferSize < (size_t)sps->coded_width * sps->coded_height * 3 / 2) {
+        rc = stage(v, "PRESUPUESTO DECODER", -6); goto fail;
+    }
+    printf("Nexo X4: decoder native_bytes=%zu limit=134217728 depth=1\n", native_bytes);
     rc = allocate(&s->cpu, memory.cpuMemorySize, 0, 0x4000);
     if (stage(v, "RESERVAR CPU", rc) < 0) goto fail;
     rc = allocate(&s->gpu, memory.gpuMemorySize, 3, 0x4000);
@@ -298,10 +410,13 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     s->streaming_copy = __get_cpuid(1, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 19));
     printf("Nexo X4: video NV12 copy mode=%u capacity=%zu source_alignment=16\n",
         s->streaming_copy ? 1u : 0u, s->staging_size);
-    v->pixels = pixels;
     printf("Nexo X4: video RGB convert mode=2 block_pixels=8 scalar_tail_max=7\n");
     rc = s->CreateDecoder(&config, &memory, &s->decoder);
     if (stage(v, "CREAR DECODER", rc) < 0) goto fail;
+    if (!s->decoder) {
+        s->decoder_creation_uncertain = true;
+        return stage(v, "HANDLE DECODER DESCONOCIDO", -7);
+    }
     int gpu_rc = x4_gpu_readback_open(&s->gpu_readback, s->staging_size);
     printf("Nexo X4: GPU readback init rc=%d capacity=%zu; pending exact comparison\n",
         gpu_rc, s->staging_size);
@@ -329,6 +444,7 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     report_copy_config(s, s->parallel_enabled ? X4_LIVE_COPY_READERS : 1u,
         s->parallel_enabled ? 0u : 1u);
 
+    v->startup_waiting_size = 0;
     stage(v, "REPRODUCIENDO", 0);
     return 0;
 fail:
@@ -355,7 +471,7 @@ static unsigned clamp(int v) { return v < 0 ? 0 : v > 255 ? 255 : (unsigned)v; }
  * pack then implements clamp(0,255). No external converter is copied. */
 __attribute__((target("sse2"), noinline))
 static void convert_nv12_sse2(uint32_t *pixels, const uint8_t *nv12,
-    unsigned width, unsigned height, unsigned pitch)
+    unsigned width, unsigned height, unsigned pitch, unsigned storage_height)
 {
     const __m128i zero = _mm_setzero_si128();
     const __m128i ybias = _mm_set1_epi16(16);
@@ -366,7 +482,7 @@ static void convert_nv12_sse2(uint32_t *pixels, const uint8_t *nv12,
     const __m128i gcoeff = _mm_setr_epi16(-100,-208,-100,-208,-100,-208,-100,-208);
     const __m128i ycoeff = _mm_set1_epi32(298);
     const __m128i alpha = _mm_set1_epi8((char)-1);
-    const uint8_t *uvplane = nv12 + (size_t)pitch * height;
+    const uint8_t *uvplane = nv12 + (size_t)pitch * storage_height;
     for (unsigned y = 0; y < height; ++y) {
         const uint8_t *yrow = nv12 + (size_t)y * pitch;
         const uint8_t *uvrow = uvplane + (size_t)(y / 2) * pitch;
@@ -727,9 +843,10 @@ static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o, un
     if (o->isErrorFrame) { *reason = 1; return -7; }
     if (!o->isValid) return 0;
     if (o->codecType != 1 || !o->frameWidth || o->frameWidth > s->max_width || (o->frameWidth & 1) ||
-        !o->frameHeight || o->frameHeight > s->max_height || (o->frameHeight & 1) || o->framePitch < o->frameWidth || o->framePitch > 8192) { *reason = 2; return -7; }
+        !o->frameHeight || (o->frameHeight != s->sps.coded_height && o->frameHeight != s->sps.visible_height) ||
+        o->frameWidth != s->sps.visible_width || (o->frameHeight & 1) || o->framePitch < o->frameWidth || o->framePitch > 8192) { *reason = 2; return -7; }
     size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
-    if (length > o->frameBufferSize || length > s->staging_size || !s->staging || ((uintptr_t)o->pFrameBuffer & 15)) { *reason = 3; return -7; }
+    if (!o->pFrameBuffer || length > o->frameBufferSize || length > s->staging_size || !s->staging || ((uintptr_t)o->pFrameBuffer & 15)) { *reason = 3; return -7; }
     int owned = 0;
     for (unsigned i = 0; i < RING; ++i)
         if (o->pFrameBuffer == s->output[i].p && length <= s->output[i].size) owned = 1;
@@ -737,11 +854,135 @@ static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o, un
     return 1;
 }
 
+/* The gate protects only queue transitions and scalar accounting. Native
+ * copy, conversion, RGB callbacks and joins always execute outside it. */
+static void conversion_lock(VideoState *s)
+{
+    while (atomic_flag_test_and_set_explicit(&s->conversion_gate, memory_order_acquire)) sceKernelUsleep(50);
+}
+static void conversion_unlock(VideoState *s)
+{ atomic_flag_clear_explicit(&s->conversion_gate, memory_order_release); }
+void x4_live_video_collect(X4LiveVideo *v, int reset_maxima)
+{
+    VideoState *s = v ? v->state : NULL;
+    if (!s || !s->sink.acquire) return;
+    conversion_lock(s);
+    v->frames = s->converted; v->convert_us = s->conversion_us;
+    v->width = s->converted_width; v->height = s->converted_height;
+    v->conversion_submitted = s->conversion_submitted; v->conversion_dropped = s->conversion_dropped;
+    v->convert_max_us = s->conversion_max_us; v->picture_gap_max_us = s->conversion_gap_max_us;
+    v->last_picture_time_us = s->conversion_completed_us; v->trace_converted_output = s->converted_output;
+    if (reset_maxima) s->conversion_max_us = s->conversion_gap_max_us = 0;
+    conversion_unlock(s);
+}
+static void *conversion_worker(void *context)
+{
+    VideoState *s = context;
+    while (!atomic_load_explicit(&s->conversion_stop, memory_order_acquire)) {
+        conversion_lock(s);
+        int slot = x4_conversion_take(&s->conversion_queue);
+        conversion_unlock(s);
+        if (slot < 0) { sceKernelUsleep(250); continue; }
+        /* Slot ownership makes both metadata and WB bytes immutable here. */
+        unsigned width = s->conversion_jobs[slot].width, height = s->conversion_jobs[slot].height;
+        uint64_t output = s->conversion_jobs[slot].output;
+        uint32_t *rgb = s->sink.acquire(s->sink.context, (size_t)width * height);
+        if (rgb) {
+            uint64_t begin = sceKernelGetProcessTime();
+            x4_trace_record(s->trace, VT_CONVERT_BEGIN, 0, output, 0);
+            convert_nv12_sse2(rgb, s->conversion_jobs[slot].nv12, width, height,
+                s->conversion_jobs[slot].pitch, s->conversion_jobs[slot].storage_height);
+            uint64_t completed = sceKernelGetProcessTime(), elapsed = completed - begin;
+            x4_trace_record(s->trace, VT_CONVERT_END, 0, output, elapsed);
+            s->sink.publish(s->sink.context, width, height, output, completed);
+            conversion_lock(s);
+            ++s->converted; s->conversion_us += elapsed;
+            if (elapsed > s->conversion_max_us) s->conversion_max_us = elapsed;
+            if (s->conversion_completed_us && completed - s->conversion_completed_us > s->conversion_gap_max_us)
+                s->conversion_gap_max_us = completed - s->conversion_completed_us;
+            s->conversion_completed_us = completed; s->converted_output = output;
+            s->converted_width = width; s->converted_height = height;
+            conversion_unlock(s);
+        }
+        conversion_lock(s);
+        if (!rgb) ++s->conversion_dropped;
+        x4_conversion_release(&s->conversion_queue, slot);
+        conversion_unlock(s);
+    }
+    return NULL;
+}
+static int stop_conversion(VideoState *s)
+{
+    if (s->conversion_join_error) return s->conversion_join_error;
+    atomic_store_explicit(&s->conversion_stop, true, memory_order_release);
+    if (s->conversion_running) {
+        int rc = scePthreadJoin(s->conversion_thread, NULL);
+        if (rc) { s->conversion_join_error = rc < 0 ? rc : -rc; return s->conversion_join_error; }
+        s->conversion_running = false;
+        /* Worker may finish its active lease but stop leaves READY unconsumed.
+         * Count each abandoned submitted job once; joined worker is quiescent. */
+        for (unsigned i = 0; i < X4_CONVERSION_SLOTS; ++i)
+            if (s->conversion_queue.state[i] == X4_CONVERSION_READY) {
+                ++s->conversion_dropped; s->conversion_queue.state[i] = X4_CONVERSION_FREE;
+            }
+    }
+    return 0;
+}
+static int submit_conversion(X4LiveVideo *v, VideoState *s)
+{
+    if (!s->conversion_running) {
+        /* All allocations succeed before worker start. A failed create owns no
+         * thread; partially allocated jobs stay in state for normal teardown. */
+        for (unsigned i = 0; i < X4_CONVERSION_SLOTS; ++i) {
+            s->conversion_jobs[i].allocation = malloc(s->staging_size + 63);
+            if (!s->conversion_jobs[i].allocation) return stage(v, "COLA NV12 CPU", -5);
+            s->conversion_jobs[i].nv12 = (uint8_t *)(((uintptr_t)s->conversion_jobs[i].allocation + 63) & ~(uintptr_t)63);
+        }
+        int rc = scePthreadCreate(&s->conversion_thread, NULL, conversion_worker, s, "x4-convert");
+        if (rc) return stage(v, "HILO CONVERSION CPU", rc < 0 ? rc : -rc);
+        s->conversion_running = true;
+        printf("Nexo X4: asynchronous NV12 conversion slots=%u bytes_per_slot=%zu\n", X4_CONVERSION_SLOTS, s->staging_size);
+    }
+    conversion_lock(s);
+    uint64_t replaced_output = 0;
+    int slot = x4_conversion_reserve(&s->conversion_queue);
+    if (slot >= 0 && s->conversion_queue.replaced) {
+        replaced_output = s->conversion_jobs[slot].output; ++s->conversion_dropped;
+    }
+    conversion_unlock(s);
+    if (slot < 0) return stage(v, "PROPIEDAD COLA NV12", -7);
+    if (replaced_output) x4_trace_record(v->trace, VT_OUTPUT_SUPERSEDE, 1u, replaced_output, s->pending_output);
+    const OrbisVideodec2OutputInfo *o = &s->pending;
+    size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
+    /* Copy helpers are joined per picture before this returns. Temporarily
+     * direct their WB destination into the exclusively COPYING-owned job. */
+    uint8_t *saved_staging = s->staging;
+    s->staging = s->conversion_jobs[slot].nv12;
+    int rc = copy_picture(v, s, o->pFrameBuffer, length);
+    s->staging = saved_staging;
+    if (rc < 0) return rc; /* Retain COPYING job and all backing storage. */
+    s->conversion_jobs[slot].width = s->sps.visible_width;
+    s->conversion_jobs[slot].height = s->sps.visible_height;
+    s->conversion_jobs[slot].pitch = o->framePitch;
+    s->conversion_jobs[slot].storage_height = o->frameHeight;
+    s->conversion_jobs[slot].output = s->pending_output;
+    s->pending_valid = false;
+    conversion_lock(s);
+    int discarded = x4_conversion_commit(&s->conversion_queue, slot);
+    ++s->conversion_submitted;
+    if (discarded >= 0) ++s->conversion_dropped;
+    uint64_t discarded_output = discarded >= 0 ? s->conversion_jobs[discarded].output : 0;
+    conversion_unlock(s);
+    if (discarded_output) x4_trace_record(v->trace, VT_OUTPUT_SUPERSEDE, 1u, discarded_output, s->conversion_jobs[slot].output);
+    return 0;
+}
+
 int x4_live_video_convert_pending(X4LiveVideo *v)
 {
     VideoState *s = v ? v->state : NULL;
     if (!s || !s->pending_valid) return 0;
     if (v->error) return v->error;
+    if (s->sink.acquire && s->sink.publish) return submit_conversion(v, s);
     const OrbisVideodec2OutputInfo *o = &s->pending;
     uint64_t output_id = s->pending_output;
     size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
@@ -749,9 +990,10 @@ int x4_live_video_convert_pending(X4LiveVideo *v)
     if (rc < 0) return rc;
     uint64_t begin = sceKernelGetProcessTime();
     x4_trace_record(v->trace, VT_CONVERT_BEGIN, 0, output_id, 0);
-    convert_nv12_sse2(v->pixels, s->staging, o->frameWidth, o->frameHeight, o->framePitch);
+    convert_nv12_sse2(v->pixels, s->staging, s->sps.visible_width,
+        s->sps.visible_height, o->framePitch, o->frameHeight);
     s->pending_valid = false;
-    v->width = o->frameWidth; v->height = o->frameHeight;
+    v->width = s->sps.visible_width; v->height = s->sps.visible_height;
     uint64_t completed = sceKernelGetProcessTime(), elapsed = completed - begin;
     v->convert_us += elapsed;
     if (elapsed > v->convert_max_us) v->convert_max_us = elapsed;
@@ -765,12 +1007,67 @@ int x4_live_video_convert_pending(X4LiveVideo *v)
 }
 
 
+int x4_live_video_poll_startup(X4LiveVideo *v)
+{
+    VideoState *s = v ? v->state : NULL;
+    if (!s || !v->startup_waiting_size || v->error) return 0;
+    uint64_t now = sceKernelGetProcessTime();
+    if (now - s->startup_size_begin_us >= UINT64_C(10000000))
+        return stage(v, "TIMEOUT RESOLUCION INICIAL", X4_SPS_SIZE);
+    if (!s->startup_size_pli_us || now - s->startup_size_pli_us >= UINT64_C(300000)) {
+        s->startup_size_pli_us = now;
+        return 1;
+    }
+    return 0;
+}
+
 int x4_live_video_feed(X4LiveVideo *v, const uint8_t *bytes, size_t size, uint64_t pts)
 {
     VideoState *s = v ? v->state : NULL;
-    if (!s || !s->decoder || !bytes || !size || size > X4_LIVE_AU_MAX || v->error) {
+    if (!s || !bytes || !size || size > X4_LIVE_AU_MAX || v->error) {
         if (v) x4_trace_record(v->trace, VT_FEED_REJECT, 0, v->trace_au, size);
         return -7;
+    }
+    if (!s->decoder) {
+        /* Find the first SPS in the complete Annex-B AU. Do not parse the
+         * entire AU as one SPS: slices may exceed the parser's 4096-byte cap. */
+        X4StreamSps parsed = {0};
+        bool found = false;
+        for (size_t at = 0; at + 3 < size; ++at) {
+            size_t prefix = bytes[at] == 0 && bytes[at + 1] == 0 && bytes[at + 2] == 1 ? 3 :
+                at + 4 < size && bytes[at] == 0 && bytes[at + 1] == 0 && bytes[at + 2] == 0 && bytes[at + 3] == 1 ? 4 : 0;
+            if (!prefix || (bytes[at + prefix] & 31) != 7) continue;
+            size_t begin = at + prefix, end = size;
+            for (size_t i = begin + 1; i + 3 <= size; ++i)
+                if (!bytes[i] && !bytes[i + 1] && bytes[i + 2] == 1) {
+                    end = i; break;
+                }
+            bool complete = false;
+            int rc = x4_stream_sps_inspect(bytes + begin, end - begin, &parsed, &complete);
+            if (rc == X4_SPS_SIZE && complete && v->stream_profile == X4_STREAM_1080 &&
+                (parsed.coded_width > 1920 || parsed.coded_height > 1088)) {
+                if (!v->startup_waiting_size) {
+                    s->startup_size_begin_us = sceKernelGetProcessTime();
+                    s->startup_size_pli_us = 0;
+                    v->startup_waiting_size = 1;
+                    stage(v, "AJUSTANDO RESOLUCION INICIAL", 0);
+                    printf("Nexo X4: initial SPS %ux%u exceeds1920x1088; wait max10000ms from first oversized SPS, PLI interval300ms\n",
+                        parsed.coded_width, parsed.coded_height);
+                }
+                return X4_LIVE_VIDEO_WAIT_SIZE;
+            }
+            if (rc < 0) return stage(v, "SPS H264 INVALIDO", rc);
+            found = true; break;
+        }
+        if (!found) return stage(v, "FALTA SPS H264", X4_SPS_INVALID);
+        /* Validate all parameter sets before native ownership is transferred. */
+        int rc = x4_stream_sps_check_au(bytes, size, &parsed);
+        if (rc < 0) return stage(v, "SPS H264 CAMBIADO", rc);
+        rc = configure_decoder(v, &parsed);
+        if (rc < 0) return rc;
+    } else {
+        int rc = x4_stream_sps_check_au(bytes, size, &s->sps);
+        if (rc < 0) return stage(v, "SPS H264 CAMBIADO", rc);
     }
     Memory *compressed = &s->input[s->input_slot];
     memcpy(compressed->p, bytes, size);
@@ -821,5 +1118,9 @@ int x4_live_video_feed(X4LiveVideo *v, const uint8_t *bytes, size_t size, uint64
             ((uint64_t)output.framePitch << 32) | ((uint64_t)output.frameHeight << 16) | output.frameWidth);
     }
     else { ++v->no_picture_calls; x4_trace_record(v->trace, VT_NOFRAME, 0, call_id, v->trace_decoder_epoch); }
+    /* Async sessions preserve every observed picture before the next Decode.
+     * Batching still bounds ingress work, but no longer suppresses fresh RGB
+     * opportunities merely because two decodes fit one owner batch. */
+    if (rc > 0 && s->sink.acquire && s->sink.publish) return x4_live_video_convert_pending(v);
     return 0;
 }

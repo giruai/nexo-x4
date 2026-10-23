@@ -13,6 +13,7 @@ typedef struct {
     size_t size;
     int allocated;
     int index;
+    int low_latency_stream;
     int64_t frame;
     uint32_t *buffers[2];
 } X4Display;
@@ -23,4 +24,6 @@ int x4_display_present(X4Display *display);
  * same as present(). The tag belongs to this call and is never retained. */
 int x4_display_present_trace(X4Display *display, X4Trace *trace,
                             uint64_t drawn_generation, bool new_generation);
+/* Only the experimental 1080p streaming path uses HSYNC. UI and 720p keep VSync. */
+void x4_display_stream_low_latency(X4Display *display, bool enabled);
 void x4_display_close(X4Display *display);

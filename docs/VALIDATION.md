@@ -1,38 +1,39 @@
-# Validation and known limits — 0.1.5
+# Validation and known limits — 0.1.9
 
-This page describes the 0.1.5 beta candidate (`APP_VER` 01.37). It distinguishes the installed build from older releases and portable tests. No logs, account data, console configuration or personal captures are included.
+This page describes the stable Nexo X4 0.1.9 release (`APP_VER` 01.41). It separates observations of the exact installed package from retained earlier tests and portable checks. It contains no account data, console configuration, private logs or personal captures.
 
-## Build and package checks
+## Build and correspondence
 
-Portable C/C++ tests passed with AddressSanitizer and UndefinedBehaviorSanitizer on Linux x86-64. Coverage includes media ingress and NACK state, adaptive-rate policy, video scaling, profile serialization, preferences, overlay copying, queue presentation, status translations, public metadata locale URLs, game-text transactions and the local keyboard. OpenOrbis compilation, linking and PKG creation passed. The installed package hash and runtime build identity matched the tested candidate.
+The release PKG was installed over the existing application; its transferred and installed SHA-256 and runtime build identity matched the tested binary. Portable C/C++ checks passed with AddressSanitizer and UndefinedBehaviorSanitizer on Linux x86-64. The asynchronous conversion fixture also passed ThreadSanitizer. OpenOrbis compilation, linking and packaging passed.
 
-The release source retains the tested program, tests, build scripts, assets and dependency locks. Release documentation was revised after hardware testing; documentation-only differences from the original build snapshot do not indicate a different executable. The PKG is the tested package, not an untested rebuild for a documentation update.
+Application code, tests, assets, build scripts and dependency locks match the frozen build inputs. Release documentation was updated after hardware testing, and a public build record was added. These documentation-only changes do not change the executable: the distributed PKG is the tested binary, not an untested rebuild. The [build record](releases/0.1.9-build.json) records the original input hashes, tested package hash and dependency bundle hash. Corresponding application and patched dependency sources accompany the release.
 
 ## Observed on PS4
 
 | Area | Evidence | Scope |
 | --- | --- | --- |
-| Stored account | Account restored without a new device-code sign-in; catalog loaded | Does not prove every future refresh/revocation case |
-| Catalog and launch | Verified catalog, artwork, public descriptions, curated rows and Fortnite launch | Availability depends on account and service |
-| Controller | Physical mapping was confirmed working by the tester; retained in 0.1.5 | One controller; no claim of local multiplayer |
-| Game-text input | Cross insertion, case change, deletion, cancellation, reopening and R2 submission produced Fortnite search results | Supported virtual-keyboard transactions; basic selectable alphabet; password requests cancelled |
-| Languages | Settings viewed in all six selectable languages; English public catalog text refreshed and Spanish was restored | Tables and formatting tested; every possible runtime error was not deliberately induced |
-| 720p profile | A new session requested 1280×720 and received 1280×720 | Request cap 60 FPS and 8 Mbps; actual delivery varies |
-| 1080p profile | A separate session requested 1920×1080; decoded output remained 1280×720 | 1080p delivery is unvalidated |
-| Performance | Clean five-second windows approached 59–60 newly presented images/s; other periods supplied about 30 | Not a sustained 60-FPS guarantee |
-| Local menu | Comparable 30-FPS periods occurred both open and closed without reported packet loss or local drops | Does not establish the cause of all frame-rate changes |
-| Diagnostics | Additional numeric diagnostics could be switched on and off and preferences persisted | Basic logs/media trace are separate; see Privacy |
+| Stored account | Saved account restored and refreshed without another device-code sign-in after in-place updates; catalog loaded | Does not prove every future expiry or revocation case |
+| 720p recovery | Main H.264 changed from level 3.2 to 4.2 within unchanged 1280×720 geometry; bounded decoder restart succeeded and playback continued | 90 seconds of selected discovery/lobby windows had no local drops or recorded loss; source cadence varied |
+| 1080p delivery | Native SPS and decoded geometry confirmed coded 1920×1088 storage, visible 1920×1080 | Native evidence; not inferred from UI output or Remote Play footage |
+| 1080p gameplay | 52 five-second windows, about 260 seconds: median 59.18 fresh FPS; a continuous minute near 60 with an empty ingress queue and no recorded loss/drops | Demanding periods fell to about 43–50 FPS; no whole-session 60-FPS guarantee |
+| Local menu | Opened and closed during live gameplay; ground/menu observations reached about 59–60 fresh FPS | Does not guarantee the same cadence in every scene |
+| Audio | AudioOut opened with 512-sample blocks, Opus decoded, and nonzero console output PCM was observed | No physical speaker listening or formal dropout/synchronization test |
+| Controller | Remote virtual movement, camera, jump and R2 exercised in the current package; physical mapping was confirmed in earlier tests and retained | One controller; no local multiplayer claim |
+| Game text | Earlier Nexo tests inserted, changed case, erased and submitted text to actual Fortnite search results; protocol and keyboard tests remain | Not physically retyped during the 0.1.9 performance run; basic Latin keyboard; password requests cancelled |
+| Languages | Six-language interface and status/keyboard localization retained, with portable table/formatting checks | Every possible runtime error was not deliberately induced |
+| Diagnostics | Numeric diagnostics and statistics toggled; disabled again after testing | Basic logs/media trace remain separate; see [Privacy](PRIVACY.md) |
+| Cleanup | 720p and 1080p sessions closed cleanly and returned to the catalog | No complete Fortnite match was played in this exact package |
 
-Two decoder recovery attempts occurred during session startup; playback recovered afterward. A complete match was not played in this exact build. This testing does not establish compatibility with every game, console setup or network.
+## Performance interpretation
 
-## Interpreting measurements
+The 1080p route copies each validated native output into independently owned WB storage and converts it on another CPU worker. Native decoding, native output ownership and teardown remain on their original thread; depth remains one. The conversion queue did not drop jobs in the measured run. Native decode plus GPU readback/copy remains a throughput limit in demanding scenes, and local ingress drops still occurred in some periods.
 
-The received resolution comes from native decoded pictures, not the 1920×1080 interface framebuffer or a Remote Play screenshot. Frame-rate observations count new images; display refreshes and repeated images are different quantities. Remote Play footage has its own lower resolution and capture rate and cannot establish native stream quality.
+The full 1080p run included discovery movies, lobby/loading and gameplay: 96 active five-second windows had a fresh-FPS median of 55.78. The gameplay-specific median above uses the first observed Battle Royale bus frame as its starting boundary. Brief rates above 60 can reflect backlog catch-up and measurement boundaries; they do not prove a service rate above 60. The comparison with older development builds is indicative, not a controlled matched-scene benchmark.
 
-A profile request, a successful local control-channel send or an RTCP request is not a server acknowledgement. No conclusion was established about whether account tier, region, device identification or another service policy caused the observed 720p delivery. The project does not promise that changing a setting or buying a subscription will unlock 1080p.
+Received resolution, fresh-image rate, display refresh and repeated images are different measurements. Remote Play has its own capture resolution/rate and cannot establish native stream quality. A lower frame rate alone is not proof of poor connectivity; local queue saturation and native processing time must be considered separately from network loss.
 
-The text-input fix accepts bounded binary and text JSON and treats transaction IDs as opaque, safely escaped identifiers. Both changes were applied together. The successful captured requests were text frames; an isolated binary-framing root cause for the older failure was not proven.
+## Remaining limits
 
-## Release classification
+1080p is supported and verified in this release. The tested package retains its earlier “experimental” setting label; that label does not mean delivery is limited to 720p. Its HSYNC presentation path can tear. Neither video profile guarantees a particular service response, bitrate or sustained frame rate. Device identity, account access, region and service policy can change delivery.
 
-Treat 0.1.5 as a **720p beta candidate**. Experimental 1080p remains a request option with received resolution shown explicitly. Unsupported upstream features are hidden from the PS4 UI. Existing limitations should remain visible in release notes rather than being represented as completed features.
+A local rate request or successful transport send is not a server acknowledgement. Resource-wait estimates are approximate. The project does not promise that a subscription purchase unlocks a resolution. Local multiplayer, voice chat, rumble, HDR, 4K and keyboard/mouse gameplay are not offered. Broader game, network and hardware compatibility has not been established by this limited test.

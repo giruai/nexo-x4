@@ -51,3 +51,7 @@ The Nexo X4 geometric icon and in-app mark are original project artwork; see [br
 The bounded GPU readback uses public packet-field information from [OpenGNM/freegnm-examples](https://github.com/PS4-OpenGNM/freegnm-examples/tree/ffd055563e5b849ebef1b276ba29e730199670f8) and [OpenGNM](https://github.com/PS4-OpenGNM/opengnm/tree/4b295ca54c82c83acf308d1c646a2dfa9ae57350). The example's [MIT notice](docs/licenses/OpenGNM-examples-MIT.txt) is retained. [GreenVita](https://github.com/Day-OS/green-vita), [Better xCloud](https://github.com/redphx/better-xcloud), and [Moonlight PS4](https://github.com/JaimeJimenezG/Moonlight-ps4) informed protocol or performance investigation; their source implementations were not copied into this project. Separate PSBox code that *was* incorporated is identified above and by its retained source headers.
 
 The public OAuth client identifier used for service compatibility is neither a secret nor a Nexo X4-owned app registration. Its use does not incorporate GreenVita code or confer ownership of that registration.
+
+### XCloud4 1.1.0-beta adaptations (introduced in Nexo 0.1.6)
+
+Additional source adapted from commit `008f4abe4f777fafa4259fe081ebfab065eed2d5`: experimental web/Windows G8 negotiation, `stream_sdp_bandwidth`, SPS parsing and adaptive audio, including corresponding portable test fixtures. Original GPL-3.0-only notices are retained; see [Credits](CREDITS.md). Native decode admission and buffer ownership remain Nexo-specific.
