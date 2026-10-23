@@ -45,6 +45,10 @@ typedef struct {
     uint64_t video_decode_us, video_decode_max_us, video_convert_us, video_convert_max_us;
     uint64_t video_conversion_submitted, video_conversion_dropped;
     uint64_t video_copy_calls, video_copy_us, video_copy_max_us, video_copy_bytes;
+    uint64_t video_gpu_transfer_calls, video_gpu_transfer_bytes, video_gpu_transfer_us, video_gpu_transfer_max_us;
+    uint64_t video_direct_jobs, video_direct_bytes, video_direct_fallback_jobs;
+    uint64_t video_gpu_check_calls, video_gpu_check_bytes, video_gpu_check_us, video_gpu_check_mismatch;
+    uint64_t video_wb_copy_calls, video_wb_copy_bytes, video_wb_copy_us;
     uint64_t video_copy_parallel_calls, video_copy_serial_calls, video_copy_owner_us, video_copy_helper_us;
     uint64_t video_copy_wait_us, video_copy_wait_max_us, video_forced_preserve_calls;
     uint64_t video_copy_check_attempts, video_copy_check_pass, video_copy_check_mismatch, video_copy_check_not_checked;

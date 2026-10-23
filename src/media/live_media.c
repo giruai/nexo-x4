@@ -911,13 +911,17 @@ static void retire_video_counters(X4LiveMedia *m)
 #define ADD(field) m->video_totals.field += m->video.field
     ADD(frames); ADD(decode_calls); ADD(decoded_frames); ADD(no_picture_calls); ADD(decode_us);
     ADD(convert_us); ADD(conversion_submitted); ADD(conversion_dropped); ADD(copy_calls); ADD(copy_us); ADD(copy_bytes);
+    ADD(gpu_transfer_calls); ADD(gpu_transfer_bytes); ADD(gpu_transfer_us);
+    ADD(gpu_check_calls); ADD(gpu_check_bytes); ADD(gpu_check_us); ADD(gpu_check_mismatch);
+    ADD(direct_jobs); ADD(direct_bytes); ADD(direct_fallback_jobs);
+    ADD(wb_copy_calls); ADD(wb_copy_bytes); ADD(wb_copy_us);
     ADD(copy_parallel_calls); ADD(copy_serial_calls); ADD(copy_owner_us); ADD(copy_helper_us);
     ADD(copy_wait_us); ADD(forced_preserve_calls); ADD(copy_check_attempts); ADD(copy_check_pass);
     ADD(copy_check_mismatch); ADD(copy_check_not_checked); ADD(copy_check_bytes); ADD(copy_check_us);
 #undef ADD
 #define MAXIMUM(field) if (m->video.field > m->video_totals.field) m->video_totals.field = m->video.field
     MAXIMUM(decode_max_us); MAXIMUM(convert_max_us); MAXIMUM(copy_max_us); MAXIMUM(picture_gap_max_us);
-    MAXIMUM(copy_wait_max_us);
+    MAXIMUM(copy_wait_max_us); MAXIMUM(gpu_transfer_max_us);
 #undef MAXIMUM
 }
 /* Called only by the decoder-owning worker, before publishing a failed
@@ -973,6 +977,20 @@ static void prepare_worker_view(X4LiveMedia *m, X4LiveMediaSnapshot *out)
     s.video_copy_calls = t->copy_calls + v->copy_calls; s.video_copy_us = t->copy_us + v->copy_us;
     s.video_copy_max_us = v->copy_max_us > t->copy_max_us ? v->copy_max_us : t->copy_max_us;
     s.video_copy_bytes = t->copy_bytes + v->copy_bytes;
+    s.video_gpu_transfer_calls = t->gpu_transfer_calls + v->gpu_transfer_calls;
+    s.video_gpu_transfer_bytes = t->gpu_transfer_bytes + v->gpu_transfer_bytes;
+    s.video_gpu_transfer_us = t->gpu_transfer_us + v->gpu_transfer_us;
+    s.video_gpu_check_calls = t->gpu_check_calls + v->gpu_check_calls;
+    s.video_gpu_check_bytes = t->gpu_check_bytes + v->gpu_check_bytes;
+    s.video_gpu_check_us = t->gpu_check_us + v->gpu_check_us;
+    s.video_gpu_check_mismatch = t->gpu_check_mismatch + v->gpu_check_mismatch;
+    s.video_direct_jobs = t->direct_jobs + v->direct_jobs;
+    s.video_direct_bytes = t->direct_bytes + v->direct_bytes;
+    s.video_direct_fallback_jobs = t->direct_fallback_jobs + v->direct_fallback_jobs;
+    s.video_wb_copy_calls = t->wb_copy_calls + v->wb_copy_calls;
+    s.video_wb_copy_bytes = t->wb_copy_bytes + v->wb_copy_bytes;
+    s.video_wb_copy_us = t->wb_copy_us + v->wb_copy_us;
+    s.video_gpu_transfer_max_us = v->gpu_transfer_max_us > t->gpu_transfer_max_us ? v->gpu_transfer_max_us : t->gpu_transfer_max_us;
     s.video_copy_parallel_calls = t->copy_parallel_calls + v->copy_parallel_calls;
     s.video_copy_serial_calls = t->copy_serial_calls + v->copy_serial_calls;
     s.video_copy_owner_us = t->copy_owner_us + v->copy_owner_us;
@@ -1096,6 +1114,7 @@ static void reset_worker_maxima(X4LiveMedia *m)
     if (!atomic_exchange(&m->reset_maxima, false)) return;
     x4_live_video_collect(&m->video, 1);
     m->tick_max_us = m->queue_age_max_us = 0;
+    m->video.gpu_transfer_max_us = m->video_totals.gpu_transfer_max_us = 0;
     m->video.decode_max_us = m->video.copy_max_us = m->video.convert_max_us = m->video.picture_gap_max_us = 0;
     m->video_totals.decode_max_us = m->video_totals.copy_max_us = m->video_totals.convert_max_us = m->video_totals.picture_gap_max_us = 0;
     m->video.copy_wait_max_us = m->video_totals.copy_wait_max_us = 0;
@@ -1177,6 +1196,22 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
         (unsigned long long)(s.video_conversion_submitted - p->video_conversion_submitted),
         (unsigned long long)(s.video_conversion_dropped - p->video_conversion_dropped),
         (unsigned long long)s.video_picture_age_us, (unsigned long long)s.video_picture_gap_max_us);
+    printf("Nexo X4: video GPU transfer=%llu bytes=%llu us=%llu max_us=%llu direct_jobs=%llu direct_bytes=%llu "
+        "fallback_jobs=%llu wb_copy=%llu wb_bytes=%llu wb_us=%llu check=%llu check_bytes=%llu check_us=%llu check_mismatch=%llu\n",
+        (unsigned long long)(s.video_gpu_transfer_calls - p->video_gpu_transfer_calls),
+        (unsigned long long)(s.video_gpu_transfer_bytes - p->video_gpu_transfer_bytes),
+        (unsigned long long)(s.video_gpu_transfer_us - p->video_gpu_transfer_us),
+        (unsigned long long)s.video_gpu_transfer_max_us,
+        (unsigned long long)(s.video_direct_jobs - p->video_direct_jobs),
+        (unsigned long long)(s.video_direct_bytes - p->video_direct_bytes),
+        (unsigned long long)(s.video_direct_fallback_jobs - p->video_direct_fallback_jobs),
+        (unsigned long long)(s.video_wb_copy_calls - p->video_wb_copy_calls),
+        (unsigned long long)(s.video_wb_copy_bytes - p->video_wb_copy_bytes),
+        (unsigned long long)(s.video_wb_copy_us - p->video_wb_copy_us),
+        (unsigned long long)(s.video_gpu_check_calls - p->video_gpu_check_calls),
+        (unsigned long long)(s.video_gpu_check_bytes - p->video_gpu_check_bytes),
+        (unsigned long long)(s.video_gpu_check_us - p->video_gpu_check_us),
+        (unsigned long long)(s.video_gpu_check_mismatch - p->video_gpu_check_mismatch));
     printf("Nexo X4: video render draw=%llu new=%llu repeat=%llu draw_us=%llu draw_max_us=%llu "
         "present=%llu present_us=%llu present_max_us=%llu queue_depth=%u highwater=%u full=%llu "
         "push_contended=%llu pop_contended=%llu dropped=%llu lost=%llu damaged=%llu pli=%llu waiting_keyframe=%u\n",

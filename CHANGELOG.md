@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.10 — unpublished performance build · PS4 APP_VER 01.42
+
+- Lease cached GPU readback destinations directly to bounded 1080p conversion jobs, eliminating the extra WB-to-WB memcpy after DMA.
+- Preserve per-context real-transfer checks, bounded CPU fallback, native ownership and retention after uncertain GPU/worker teardown.
+- Add separate GPU transfer, direct-job, fallback, WB-copy and initial-check measurements and failure-injection regression tests.
+
+Portable checks, sanitizer tests and native build passed. PS4 testing measured a 37% shorter image-copy stage (3.28→2.05 ms), verified actual 1080p and 720p SPS recovery, and retained saved sign-in. A 130-second interval measured 59.4–60.2 fresh FPS; demanding scenes still dropped below 60. See [measurements and limits](docs/PERFORMANCE-0.1.10.md). Stable 0.1.9 remains the public release.
+
 ## 0.1.9 — stable release · PS4 APP_VER 01.41
 
 - Correct observed 720p H.264 level 32→42 transitions without increasing the selected resolution limit: native admission uses the tested level 42 ceiling independently of the requested SDP level. DPB, geometry, crop and memory bounds remain enforced.
@@ -7,7 +15,7 @@
 - Publish RGB through existing reader/writer leases; replace queued old frames without recycling active buffers. Join the converter before restart/free and retain storage after uncertain teardown.
 - Add async job/drop measurements, per-output ownership fixtures and exact720p SPS transition regression tests. Preserve UI, audio, input and saved sign-in.
 
-Portable tests and native build do not establish60 FPS. Hardware validation of this candidate is pending; no public release is implied.
+Portable and native checks passed. Hardware validation confirmed 720p recovery and actual 1080p; gameplay reached a median of about 59 fresh FPS, with demanding scenes around 43–50 FPS. See [stable validation](docs/VALIDATION.md).
 
 ## 0.1.8 — local diagnostic build · PS4 APP_VER 01.40
 

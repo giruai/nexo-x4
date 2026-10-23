@@ -27,6 +27,13 @@ typedef struct {
     /* Selected-copy wall time includes dispatch/completion, but excludes the
      * first-copy serial reference/compare. Reader times may overlap. */
     uint64_t copy_calls, copy_us, copy_max_us, copy_bytes;
+    /* Owner-only GPU transfer attempts/time (includes safe rejection); bytes
+     * count completed transfers. Direct bytes are avoided WB->WB memcpy bytes,
+     * not an estimated timing saving. First exact checks are excluded. */
+    uint64_t gpu_transfer_calls, gpu_transfer_bytes, gpu_transfer_us, gpu_transfer_max_us;
+    uint64_t direct_jobs, direct_bytes, direct_fallback_jobs;
+    uint64_t gpu_check_calls, gpu_check_bytes, gpu_check_us, gpu_check_mismatch;
+    uint64_t wb_copy_calls, wb_copy_bytes, wb_copy_us;
     /* helper_us is the SUM of overlapping elapsed spans across three helpers;
      * it is neither CPU time nor an additional contribution to copy wall. */
     uint64_t copy_parallel_calls, copy_serial_calls, copy_owner_us, copy_helper_us;
@@ -46,6 +53,9 @@ typedef struct {
 } X4LiveVideo;
 /* All public calls run on one video-owner thread. The optional CPU converter
  * touches immutable WB jobs and sink callbacks only; collect merges its counters.
+ * Selected1080 async jobs lease independent GPU WB destinations through ACTIVE
+ * release. Only the owner calls readback APIs; CPU fallback storage is bounded
+ * and lazy. A failed GPU completion/release retains native source ownership.
  * Three optional persistent CPU-only copy helpers finish their disjoint spans
  * before a copied job is published, Decode or native
  * teardown. A partial pool is stopped/joined before serial fallback. The caller

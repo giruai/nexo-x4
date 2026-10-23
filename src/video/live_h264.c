@@ -86,6 +86,7 @@ struct VideoState {
     uint64_t copy_sequence;
     X4GpuReadback *gpu_readback;
     bool gpu_readback_checked;
+    bool direct_readback;
     /* Native owner copies to COPYING slots; CPU worker consumes READY slots.
      * Every slot retains its allocation until successful converter join. */
     X4ConversionQueue conversion_queue;
@@ -97,7 +98,9 @@ struct VideoState {
     X4LiveVideoSink sink;
     struct {
         void *allocation;
-        uint8_t *nv12;
+        const uint8_t *nv12;
+        X4GpuReadback *readback;
+        bool readback_checked;
         unsigned width, height, pitch, storage_height;
         uint64_t output;
     } conversion_jobs[X4_CONVERSION_SLOTS];
@@ -205,7 +208,11 @@ int x4_live_video_stop(X4LiveVideo *v)
     /* A timed-out GPU read still owns the native source. Retain the decoder,
      * output ring and all DMA storage until completion is proven. */
     int gpu_rc = x4_gpu_readback_close(&s->gpu_readback);
-    if (gpu_rc < 0) return stage(v, "CERRAR COPIA GPU", gpu_rc);
+    if (gpu_rc != 0) return stage(v, "CERRAR COPIA GPU", gpu_rc < 0 ? gpu_rc : -7);
+    for (unsigned i = 0; i < X4_CONVERSION_SLOTS; ++i) {
+        gpu_rc = x4_gpu_readback_close(&s->conversion_jobs[i].readback);
+        if (gpu_rc != 0) return stage(v, "CERRAR LEASE GPU", gpu_rc < 0 ? gpu_rc : -7);
+    }
     /* A successful create without its handle cannot prove native ownership
      * ended. Retain all reservations; no guessed Delete(NULL) is safe. */
     if (s->decoder_creation_uncertain) return stage(v, "HANDLE DECODER DESCONOCIDO", -7);
@@ -417,7 +424,8 @@ static int configure_decoder(X4LiveVideo *v, const X4StreamSps *sps)
         s->decoder_creation_uncertain = true;
         return stage(v, "HANDLE DECODER DESCONOCIDO", -7);
     }
-    int gpu_rc = x4_gpu_readback_open(&s->gpu_readback, s->staging_size);
+    s->direct_readback = v->stream_profile == X4_STREAM_1080 && s->sink.acquire;
+    int gpu_rc = s->direct_readback ? 1 : x4_gpu_readback_open(&s->gpu_readback, s->staging_size);
     printf("Nexo X4: GPU readback init rc=%d capacity=%zu; pending exact comparison\n",
         gpu_rc, s->staging_size);
     if (gpu_rc != 0 && s->gpu_readback) {
@@ -684,6 +692,19 @@ static void report_copy_check(unsigned result, unsigned reason, size_t length, u
         result, reason, length, (unsigned long long)elapsed);
 }
 
+/* Verification traffic is reported separately from steady transfer/copy time. */
+static bool check_gpu_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source,
+    const uint8_t *data, size_t length)
+{
+    uint64_t begin = sceKernelGetProcessTime();
+    copy_span(s->staging, source, length, s->streaming_copy);
+    bool equal = data && memcmp(s->staging, data, length) == 0;
+    ++v->gpu_check_calls; v->gpu_check_bytes += length;
+    v->gpu_check_us += sceKernelGetProcessTime() - begin;
+    if (!equal) ++v->gpu_check_mismatch;
+    return equal;
+}
+
 static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, size_t length)
 {
     if (!source || !s->staging || !length || length > s->staging_size || ((uintptr_t)source & 15))
@@ -692,13 +713,15 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
         uint64_t begin = sceKernelGetProcessTime();
         int rc = x4_gpu_readback_transfer(s->gpu_readback, source, length);
         uint64_t transfer_us = sceKernelGetProcessTime() - begin;
+        ++v->gpu_transfer_calls; v->gpu_transfer_us += transfer_us;
+        if (transfer_us > v->gpu_transfer_max_us) v->gpu_transfer_max_us = transfer_us;
+        if (rc == 0) v->gpu_transfer_bytes += length;
         if (rc < 0) return stage(v, "COPIAR IMAGEN GPU", rc);
         bool usable = rc == 0;
         if (usable && !s->gpu_readback_checked) {
             /* The decoder output remains leased throughout both reads. Test
              * the real WC->WB direction, not just synthetic command success. */
-            copy_span(s->staging, source, length, s->streaming_copy);
-            usable = memcmp(s->staging, x4_gpu_readback_data(s->gpu_readback), length) == 0;
+            usable = check_gpu_picture(v, s, source, x4_gpu_readback_data(s->gpu_readback), length);
             s->gpu_readback_checked = usable;
             printf("Nexo X4: GPU readback exact_check=%s bytes=%zu transfer_us=%llu\n",
                 usable ? "pass" : "mismatch", length, (unsigned long long)transfer_us);
@@ -706,7 +729,9 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
         if (usable) {
             uint64_t copied = sceKernelGetProcessTime();
             memcpy(s->staging, x4_gpu_readback_data(s->gpu_readback), length);
-            uint64_t elapsed = transfer_us + sceKernelGetProcessTime() - copied;
+            uint64_t memcpy_us = sceKernelGetProcessTime() - copied;
+            ++v->wb_copy_calls; v->wb_copy_bytes += length; v->wb_copy_us += memcpy_us;
+            uint64_t elapsed = transfer_us + memcpy_us;
             ++v->copy_calls; v->copy_bytes += length; v->copy_us += elapsed;
             if (elapsed > v->copy_max_us) v->copy_max_us = elapsed;
             return 0;
@@ -931,12 +956,14 @@ static int stop_conversion(VideoState *s)
 static int submit_conversion(X4LiveVideo *v, VideoState *s)
 {
     if (!s->conversion_running) {
-        /* All allocations succeed before worker start. A failed create owns no
-         * thread; partially allocated jobs stay in state for normal teardown. */
-        for (unsigned i = 0; i < X4_CONVERSION_SLOTS; ++i) {
-            s->conversion_jobs[i].allocation = malloc(s->staging_size + 63);
-            if (!s->conversion_jobs[i].allocation) return stage(v, "COLA NV12 CPU", -5);
-            s->conversion_jobs[i].nv12 = (uint8_t *)(((uintptr_t)s->conversion_jobs[i].allocation + 63) & ~(uintptr_t)63);
+        /* Only the owner creates/transfers/closes GPU contexts. Each context
+         * belongs to exactly one queue slot; ACTIVE bytes remain immutable
+         * until the converter releases it. No singleton DMA target aliases an
+         * active lease. CPU fallback heaps are allocated only when needed. */
+        if (s->direct_readback) for (unsigned i = 0; i < X4_CONVERSION_SLOTS; ++i) {
+            int rc = x4_gpu_readback_open(&s->conversion_jobs[i].readback, s->staging_size);
+            if (rc && s->conversion_jobs[i].readback)
+                return stage(v, "RESERVAR LEASE GPU", rc < 0 ? rc : -7);
         }
         int rc = scePthreadCreate(&s->conversion_thread, NULL, conversion_worker, s, "x4-convert");
         if (rc) return stage(v, "HILO CONVERSION CPU", rc < 0 ? rc : -rc);
@@ -954,13 +981,49 @@ static int submit_conversion(X4LiveVideo *v, VideoState *s)
     if (replaced_output) x4_trace_record(v->trace, VT_OUTPUT_SUPERSEDE, 1u, replaced_output, s->pending_output);
     const OrbisVideodec2OutputInfo *o = &s->pending;
     size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
-    /* Copy helpers are joined per picture before this returns. Temporarily
-     * direct their WB destination into the exclusively COPYING-owned job. */
-    uint8_t *saved_staging = s->staging;
-    s->staging = s->conversion_jobs[slot].nv12;
-    int rc = copy_picture(v, s, o->pFrameBuffer, length);
-    s->staging = saved_staging;
-    if (rc < 0) return rc; /* Retain COPYING job and all backing storage. */
+    bool direct = false;
+    if (s->conversion_jobs[slot].readback) {
+        uint64_t begin = sceKernelGetProcessTime();
+        int rc = x4_gpu_readback_transfer(s->conversion_jobs[slot].readback, o->pFrameBuffer, length);
+        uint64_t elapsed = sceKernelGetProcessTime() - begin;
+        ++v->gpu_transfer_calls; v->gpu_transfer_us += elapsed;
+        if (elapsed > v->gpu_transfer_max_us) v->gpu_transfer_max_us = elapsed;
+        if (rc < 0) return stage(v, "COPIAR LEASE GPU", rc);
+        const uint8_t *data = rc == 0 ? x4_gpu_readback_data(s->conversion_jobs[slot].readback) : NULL;
+        direct = data != NULL;
+        if (rc == 0) v->gpu_transfer_bytes += length;
+        if (direct && !s->conversion_jobs[slot].readback_checked) {
+            /* First real transfer for EVERY independent context, while native
+             * output remains leased. Owner scratch never crosses to worker. */
+            direct = check_gpu_picture(v, s, o->pFrameBuffer, data, length);
+            s->conversion_jobs[slot].readback_checked = direct;
+            printf("Nexo X4: GPU lease slot=%d exact_check=%u bytes=%zu\n", slot, direct ? 1u : 0u, length);
+        }
+        if (direct) {
+            s->conversion_jobs[slot].nv12 = data;
+            ++v->copy_calls; v->copy_bytes += length; v->copy_us += elapsed;
+            if (elapsed > v->copy_max_us) v->copy_max_us = elapsed;
+        } else {
+            /* Safe reject/mismatch: no worker owns this COPYING context.
+             * A failed close retains it and prevents native reuse/teardown. */
+            int close_rc = x4_gpu_readback_close(&s->conversion_jobs[slot].readback);
+            if (close_rc) return stage(v, "CERRAR LEASE GPU", close_rc < 0 ? close_rc : -7);
+        }
+    }
+    if (!direct) {
+        if (!s->conversion_jobs[slot].allocation) {
+            s->conversion_jobs[slot].allocation = malloc(s->staging_size + 63);
+            if (!s->conversion_jobs[slot].allocation) return stage(v, "COLA NV12 CPU", -5);
+        }
+        uint8_t *destination = (uint8_t *)(((uintptr_t)s->conversion_jobs[slot].allocation + 63) & ~(uintptr_t)63);
+        /* All helper spans complete before publication or restoration. */
+        uint8_t *saved_staging = s->staging;
+        s->staging = destination;
+        int rc = copy_picture(v, s, o->pFrameBuffer, length);
+        s->staging = saved_staging;
+        if (rc < 0) return rc; /* Retain COPYING and all backing storage. */
+        s->conversion_jobs[slot].nv12 = destination;
+    }
     s->conversion_jobs[slot].width = s->sps.visible_width;
     s->conversion_jobs[slot].height = s->sps.visible_height;
     s->conversion_jobs[slot].pitch = o->framePitch;
@@ -970,6 +1033,8 @@ static int submit_conversion(X4LiveVideo *v, VideoState *s)
     conversion_lock(s);
     int discarded = x4_conversion_commit(&s->conversion_queue, slot);
     ++s->conversion_submitted;
+    if (direct) { ++v->direct_jobs; v->direct_bytes += length; }
+    else if (s->direct_readback) ++v->direct_fallback_jobs;
     if (discarded >= 0) ++s->conversion_dropped;
     uint64_t discarded_output = discarded >= 0 ? s->conversion_jobs[discarded].output : 0;
     conversion_unlock(s);

@@ -10,7 +10,7 @@
 
 **An independent Xbox Cloud Gaming client for PS4 homebrew.** Nexo X4 combines XCloud4's native streaming foundation with a PS4 adaptation of RafaelNGP's PSBox catalog interface. It is unofficial and unaffiliated with Microsoft, Xbox, Sony or PlayStation.
 
-**Current stable release: 0.1.9.** Both 720p and actual 1920×1080 streaming have been verified on PS4. The 1080p Fortnite gameplay sample had a median of about 59 newly presented frames/s, including a continuous minute near 60. More demanding scenes fell to about 43–50 FPS; 60 FPS is not guaranteed throughout a session. See [validation and known limits](docs/VALIDATION.md).
+**Current stable release: 0.1.9.** The repository also contains the [0.1.10 performance candidate](docs/PERFORMANCE-0.1.10.md), built and tested on PS4 but not yet released. Both 720p and actual 1920×1080 streaming have been verified on PS4. The 1080p Fortnite gameplay sample had a median of about 59 newly presented frames/s, including a continuous minute near 60. More demanding scenes fell to about 43–50 FPS; 60 FPS is not guaranteed throughout a session. See [validation and known limits](docs/VALIDATION.md).
 
 [Releases and downloads](https://github.com/giruai/nexo-x4/releases) · [Build guide](docs/BUILDING.md) · [Changelog](CHANGELOG.md) · [Credits](CREDITS.md)
 
@@ -45,7 +45,7 @@ Local multiplayer, microphone/voice chat, keyboard/mouse gameplay, rumble, HDR, 
 3. Complete Microsoft sign-in using the displayed official verification address and code. Open the catalog and select a title available to your account.
 4. Use Options for language, next-session video profile and additional diagnostics. During streaming, Options opens Nexo's local menu; its Xbox button action opens the service's separate Guide.
 
-The product version is **0.1.9**, its PS4 `APP_VER` is **01.41**, and the title ID remains `XCLD00001` for update compatibility. Generated output is `dist/Nexo-X4-v0.1.9-ps4.pkg`. Sign-in may still be required again if Microsoft expires or revokes renewal credentials.
+The latest stable package version is **0.1.9**, its PS4 `APP_VER` is **01.41**, and the title ID remains `XCLD00001` for update compatibility. Generated output is `dist/Nexo-X4-v0.1.9-ps4.pkg`. Sign-in may still be required again if Microsoft expires or revokes renewal credentials.
 
 The local game-text keyboard uses the D-pad to choose, Cross to insert, Triangle to change case, Square to erase, R1 for space, R2 to submit and Circle to cancel. This is separate from a game's own on-screen keyboard.
 

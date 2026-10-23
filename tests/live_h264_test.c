@@ -63,12 +63,39 @@ int sceKernelReleaseDirectMemory(off_t offset,size_t size)
     assert(!active_decoder);assert(reservations[offset].size==size);
     free(reservations[offset].p);reservations[offset]=(Reservation){0};--live_reservations;return 0;
 }
-int x4_gpu_readback_open(X4GpuReadback **g,size_t n) { (void)n;*g=NULL;return 1; }
+/* Bounded readback ownership fixture; real DMA/cache correctness is hardware
+ * coverage, while these buffers make lease violations visible to sanitizers. */
+struct X4GpuReadback { uint8_t *data; size_t capacity; bool inflight; int close_error; };
+static unsigned gpu_enabled, gpu_contexts, gpu_open_calls, gpu_transfer_calls;
+static unsigned gpu_mismatch, gpu_safe_reject;
+static int gpu_transfer_error;
+static unsigned gpu_open_error_at;
+int x4_gpu_readback_open(X4GpuReadback **g,size_t n)
+{
+    ASSERT_NATIVE_OWNER();++gpu_open_calls;
+    if(!gpu_enabled){*g=NULL;return 1;}
+    assert(!*g);*g=calloc(1,sizeof(**g));assert(*g);
+    (*g)->data=malloc(n);assert((*g)->data);(*g)->capacity=n;++gpu_contexts;
+    if(gpu_open_error_at==gpu_open_calls){(*g)->close_error=-86;return -86;}
+    return 0;
+}
 int x4_gpu_readback_transfer(X4GpuReadback *g,const void *p,size_t n)
-{ (void)g;(void)p;(void)n;assert(0);return 1; }
-const uint8_t *x4_gpu_readback_data(const X4GpuReadback *g) { (void)g;return NULL; }
-bool x4_gpu_readback_inflight(const X4GpuReadback *g) { return g!=NULL; }
-int x4_gpu_readback_close(X4GpuReadback **g) { if(gpu_close_error)return gpu_close_error;*g=NULL;return 0; }
+{
+    ASSERT_NATIVE_OWNER();assert(g&&n<=g->capacity&&!g->inflight);++gpu_transfer_calls;
+    if(gpu_transfer_error){g->inflight=true;return gpu_transfer_error;}
+    if(gpu_safe_reject)return 1;
+    memcpy(g->data,p,n);if(gpu_mismatch)g->data[n-1]^=1;return 0;
+}
+const uint8_t *x4_gpu_readback_data(const X4GpuReadback *g)
+{ ASSERT_NATIVE_OWNER();return g&&!g->inflight?g->data:NULL; }
+bool x4_gpu_readback_inflight(const X4GpuReadback *g) { return g&&g->inflight; }
+int x4_gpu_readback_close(X4GpuReadback **g)
+{
+    ASSERT_NATIVE_OWNER();if(gpu_close_error)return gpu_close_error;
+    if(!*g)return 0;if((*g)->inflight)return -88;
+    if((*g)->close_error)return (*g)->close_error;
+    free((*g)->data);free(*g);*g=NULL;--gpu_contexts;return 0;
+}
 void x4_trace_record(X4Trace *t,uint16_t e,uint16_t f,uint64_t a,uint64_t b)
 { (void)t;(void)e;(void)f;(void)a;(void)b; }
 static int32_t query_compute(OrbisVideodec2ComputeMemoryInfo *m) { ASSERT_NATIVE_OWNER();m->cpuGpuMemorySize=16384;return 0; }
@@ -85,7 +112,7 @@ static int32_t query_decoder(const OrbisVideodec2DecoderConfigInfo *c,OrbisVideo
 static int32_t create_decoder(const OrbisVideodec2DecoderConfigInfo *c,const OrbisVideodec2DecoderMemoryInfo *m,void **d)
 { ASSERT_NATIVE_OWNER();assert(!memcmp(c,&queried,sizeof(*c)));assert(m->pGpuMemory);++create_calls;++active_decoder;*d=create_null?NULL:(void *)2;return 0; }
 static int32_t delete_decoder(void *d)
-{ ASSERT_NATIVE_OWNER();assert(d);++delete_calls;if(delete_error)return delete_error;--active_decoder;previous_input=NULL;return 0; }
+{ ASSERT_NATIVE_OWNER();assert(d);assert(!gpu_contexts);++delete_calls;if(delete_error)return delete_error;--active_decoder;previous_input=NULL;return 0; }
 static int32_t decode(void *d,const OrbisVideodec2InputData *i,OrbisVideodec2FrameBuffer *f,OrbisVideodec2OutputInfo *o)
 {
     ASSERT_NATIVE_OWNER();assert(d&&active_decoder);assert(i->pAuData&&i->auSize);
@@ -153,7 +180,8 @@ static size_t sps_au(uint8_t *p,unsigned width,unsigned coded_height,unsigned cr
 static uint32_t *pixels;
 static X4LiveVideo begin(int profile)
 {
-    assert(!live_reservations&&!active_decoder);previous_input=NULL;
+    assert(!live_reservations&&!active_decoder&&!gpu_contexts);previous_input=NULL;
+    gpu_enabled=gpu_open_calls=gpu_transfer_calls=gpu_mismatch=gpu_safe_reject=0;gpu_transfer_error=0;gpu_open_error_at=0;
     query_calls=create_calls=decode_calls=delete_calls=0;
     output_height=output_pitch=no_picture=bad_pointer=bad_size=oversized_memory=0;
     delete_error=gpu_close_error=create_null=0;fixture_explicit_dpb=0;

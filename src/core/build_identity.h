@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Frozen native sources plus independent, explicit experiment modes. */
 #pragma once
-#define X4_PRODUCT_VERSION "0.1.9"
-#define X4_SOURCE_ID "nexo-x4-v0.1.9-async1080-sps"
+#define X4_PRODUCT_VERSION "0.1.10"
+#define X4_SOURCE_ID "nexo-x4-v0.1.10-directwb"
 #if X4_RECEIVER_NACK
 #define X4_NACK_ID "-n1"
 #else
