@@ -5,12 +5,12 @@
 [![Host checks](https://github.com/giruai/nexo-x4/actions/workflows/host-checks.yml/badge.svg)](https://github.com/giruai/nexo-x4/actions/workflows/host-checks.yml)
 ![PS4 homebrew](https://img.shields.io/badge/platform-PS4-003791)
 ![OpenOrbis](https://img.shields.io/badge/toolchain-OpenOrbis-334155)
-[![Release 0.1.9](https://img.shields.io/badge/release-0.1.9-2563EB)](https://github.com/giruai/nexo-x4/releases/tag/v0.1.9)
+[![Release 0.1.10](https://img.shields.io/badge/release-0.1.10-2563EB)](https://github.com/giruai/nexo-x4/releases/tag/v0.1.10)
 ![GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-3DA639)
 
 **An independent Xbox Cloud Gaming client for PS4 homebrew.** Nexo X4 combines XCloud4's native streaming foundation with a PS4 adaptation of RafaelNGP's PSBox catalog interface. It is unofficial and unaffiliated with Microsoft, Xbox, Sony or PlayStation.
 
-**Current stable release: 0.1.9.** The repository also contains the [0.1.10 performance candidate](docs/PERFORMANCE-0.1.10.md), built and tested on PS4 but not yet released. Both 720p and actual 1920×1080 streaming have been verified on PS4. The 1080p Fortnite gameplay sample had a median of about 59 newly presented frames/s, including a continuous minute near 60. More demanding scenes fell to about 43–50 FPS; 60 FPS is not guaranteed throughout a session. See [validation and known limits](docs/VALIDATION.md).
+**Current stable release: 0.1.10.** Native 720p and 1920×1080 streaming have been verified on PS4. This release removes an extra 1080p image copy: the measured copy stage decreased from 3.28 to 2.05 ms. A sampled Fortnite gameplay interval ran near 60 fresh FPS for 130 seconds, but demanding scenes still dropped below 60. See [validation and known limits](docs/VALIDATION.md) and [release notes](docs/RELEASE-0.1.10.md).
 
 [Releases and downloads](https://github.com/giruai/nexo-x4/releases) · [Build guide](docs/BUILDING.md) · [Changelog](CHANGELOG.md) · [Credits](CREDITS.md)
 
@@ -30,7 +30,7 @@ A legitimate Microsoft account, a supported service region and the selected game
 | Setting | What it requests | What was verified |
 | --- | --- | --- |
 | 720p | Up to 60 FPS; adaptive requests within 3–8 Mbps | Decoded 1280×720, including clean measured windows near 60 new images/s |
-| 1080p | Up to 60 FPS; adaptive requests within 5–8 Mbps | Native 1920×1080 verified; about 59 FPS median in the sampled Fortnite gameplay |
+| 1080p | Up to 60 FPS; adaptive requests within 5–8 Mbps | Native 1920×1080 verified; about 60 FPS median in the sampled Fortnite gameplay; drops remain |
 
 Profiles apply to the **next cloud session**. The in-game menu shows the received dimensions and measured frame rate separately from the requested profile. Neither profile guarantees a particular service response or sustained frame rate. Catalog movies and other source-limited scenes may supply fewer frames; demanding gameplay can also exceed the client's processing budget.
 
@@ -45,7 +45,7 @@ Local multiplayer, microphone/voice chat, keyboard/mouse gameplay, rumble, HDR, 
 3. Complete Microsoft sign-in using the displayed official verification address and code. Open the catalog and select a title available to your account.
 4. Use Options for language, next-session video profile and additional diagnostics. During streaming, Options opens Nexo's local menu; its Xbox button action opens the service's separate Guide.
 
-The latest stable package version is **0.1.9**, its PS4 `APP_VER` is **01.41**, and the title ID remains `XCLD00001` for update compatibility. Generated output is `dist/Nexo-X4-v0.1.9-ps4.pkg`. Sign-in may still be required again if Microsoft expires or revokes renewal credentials.
+The latest stable package version is **0.1.10**, its PS4 `APP_VER` is **01.42**, and the title ID remains `XCLD00001` for update compatibility. Generated output is `dist/Nexo-X4-v0.1.10-ps4.pkg`. Sign-in may still be required again if Microsoft expires or revokes renewal credentials.
 
 The local game-text keyboard uses the D-pad to choose, Cross to insert, Triangle to change case, Square to erase, R1 for space, R2 to submit and Circle to cancel. This is separate from a game's own on-screen keyboard.
 

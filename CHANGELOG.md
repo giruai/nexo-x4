@@ -4,13 +4,13 @@
 
 Tested and rejected a local 0.1.11 decoder-scheduling experiment: deferring idle CPU-copy workers did not reach the 10% slow-frame target. Restored the tested 0.1.10 code and package; no experimental release was published. See [method, measurements and limits](docs/experiments/DECODE-SCHEDULING.md).
 
-## 0.1.10 — unpublished performance build · PS4 APP_VER 01.42
+## 0.1.10 — stable release · PS4 APP_VER 01.42
 
 - Lease cached GPU readback destinations directly to bounded 1080p conversion jobs, eliminating the extra WB-to-WB memcpy after DMA.
 - Preserve per-context real-transfer checks, bounded CPU fallback, native ownership and retention after uncertain GPU/worker teardown.
 - Add separate GPU transfer, direct-job, fallback, WB-copy and initial-check measurements and failure-injection regression tests.
 
-Portable checks, sanitizer tests and native build passed. PS4 testing measured a 37% shorter image-copy stage (3.28→2.05 ms), verified actual 1080p and 720p SPS recovery, and retained saved sign-in. A 130-second interval measured 59.4–60.2 fresh FPS; demanding scenes still dropped below 60. See [measurements and limits](docs/PERFORMANCE-0.1.10.md). Stable 0.1.9 remains the public release.
+Portable checks, sanitizer tests and native build passed. PS4 testing measured a 37% shorter image-copy stage (3.28→2.05 ms), verified actual 1080p and 720p SPS recovery, and retained saved sign-in. A 130-second interval measured 59.4–60.2 fresh FPS; demanding scenes still dropped below 60. See [measurements and limits](docs/PERFORMANCE-0.1.10.md). The release uses the exact hardware-tested package; post-test documentation updates do not change the executable.
 
 ## 0.1.9 — stable release · PS4 APP_VER 01.41
 

@@ -2,7 +2,7 @@
   "version": "0.1.10",
   "app_version": "01.42",
   "source_id": "nexo-x4-v0.1.10-directwb",
-  "status": "hardware-tested candidate; no release published",
+  "status": "stable release; exact hardware-tested package",
   "package_sha256": "61e9d9552eb815def390eb7465df917f47284dc087af3be47d8c120a19c91a7f",
   "package_bytes": 13565952,
   "original_build_source_archive_sha256": "f91206ad833b188b75292fd471e5591a01829d202d8c47102366f5dce50430b9",

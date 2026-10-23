@@ -1,6 +1,6 @@
 # Nexo X4 0.1.10 performance build
 
-Performance candidate tested on PS4 on 2026-10-23, PS4 APP_VER 01.42. The latest public stable release remains 0.1.9. This candidate has not been published as a release.
+Stable 0.1.10 release, tested on PS4 on 2026-10-23, PS4 APP_VER 01.42. The distributed package is the exact tested binary.
 
 The 1080p async conversion queue can now lease independent GPU-readable/cached WB destinations directly. This removes the extra memcpy from the DMA destination into a heap job. The decoder owner remains the sole caller of native decode, transfer and teardown APIs; the converter reads only a completed, exclusively leased destination. Initial real transfers are compared byte-for-byte against the owner scratch copy. Safe GPU rejection or mismatch uses bounded CPU fallback; uncertain submission/completion/release retains all potentially owned storage before native decoder deletion.
 
@@ -12,7 +12,7 @@ Portable tests exercise per-output content with a converter blocked while 20 lat
 
 The transferred and installed package hashes and runtime identity matched the tested candidate. The [build record](releases/0.1.10-build.json) records the original inputs. Documentation was updated after testing; these documentation-only changes do not change the executable.
 
-| Measurement | 0.1.9 reference | 0.1.10 candidate |
+| Measurement | 0.1.9 reference | 0.1.10 |
 | --- | ---: | ---: |
 | Native visible image | 1920×1080 | 1920×1080 |
 | Bytes per copied image | 3,133,440 | 3,133,440 |

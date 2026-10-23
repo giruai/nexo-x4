@@ -1,6 +1,6 @@
 # Building Nexo X4
 
-This guide describes v0.1.9 (`APP_VER` `01.41`). The output is `dist/Nexo-X4-v0.1.9-ps4.pkg`. Build scripts are run from the repository root.
+This guide describes v0.1.10 (`APP_VER` `01.42`). The output is `dist/Nexo-X4-v0.1.10-ps4.pkg`. Build scripts are run from the repository root.
 
 ## Host and inputs
 
@@ -19,7 +19,7 @@ With GitHub CLI:
 
 ```sh
 mkdir -p .local/downloads
-gh release download v0.1.9 --repo giruai/nexo-x4 \
+gh release download v0.1.10 --repo giruai/nexo-x4 \
   --pattern 'Nexo-X4-v0.1.0-dependency-sources.tar.gz' --dir .local/downloads
 ./scripts/bootstrap-toolchain.sh
 ./scripts/bootstrap-packager.sh
@@ -60,4 +60,4 @@ The dependency source bundle retains pinned upstream test certificates, sample s
 
 ## Profiles and diagnostics
 
-`make` builds numeric input instrumentation with `X4_INPUT_TRACE=1` by default; its runtime switch in Options defaults off. `X4_INPUT_TRACE=0` can compile out the trigger probes. The switch does not enable diagnostic mailbox commands or capture text/account data. Build/version names come from `VERSION`, `APP_VERSION` and `src/core/build_identity.h`; keep them consistent. The 0.1.9 release passed portable tests, native compilation and PS4 hardware checks for 720p recovery and actual 1080p playback. See [Validation](VALIDATION.md) for the measured cadence and its limits. The distributed PKG is the hardware-tested binary. Post-test release documentation changes do not change its executable; [the build record](releases/0.1.9-build.json) records the original input hashes and tested PKG hash.
+`make` builds numeric input instrumentation with `X4_INPUT_TRACE=1` by default; its runtime switch in Options defaults off. `X4_INPUT_TRACE=0` can compile out the trigger probes. The switch does not enable diagnostic mailbox commands or capture text/account data. Build/version names come from `VERSION`, `APP_VERSION` and `src/core/build_identity.h`; keep them consistent. The 0.1.10 release passed portable tests, native compilation and PS4 hardware checks for 720p recovery and actual 1080p playback. See [Validation](VALIDATION.md) for the measured cadence and its limits. The distributed PKG is the hardware-tested binary. Post-test release documentation changes do not change its executable; [the build record](releases/0.1.10-build.json) records the original input hashes and tested PKG hash.
