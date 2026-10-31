@@ -140,7 +140,8 @@ enum class Action {
     None, Play, SignOut, Retry, CancelLaunch, SettingsChanged, PrefsChanged, ConsolesShown, UpdateNow, UpdateLater,
     GameSettingsChanged,
     Report,  // "Report a problem" (Triangle on an error or in Settings): reportWhat is the error shown
-    LoginCountry  // the sign-in country changed (settings): save them and sign in again
+    LoginCountry,  // the sign-in country changed (settings): save them and sign in again
+    ImportSavedSession  // explicit Settings action: copy the current console user's saved Nexo session
 };
 
 // How "Your games" is sorted (R3).
@@ -155,7 +156,7 @@ struct PriceInfo {
 struct UiEvent {
     Action action = Action::None;
     GameTile game;
-    SettingsChoice settings;  // SettingsChanged
+    SettingsChoice settings;  // SettingsChanged / ImportSavedSession
     app::GameProfile gameProfile;  // GameSettingsChanged
     bool hasGameProfile = false;
     // PrefsChanged: hidden games (product ids) and the "Your games" order.
@@ -501,7 +502,7 @@ private:
     bool regionRefused_ = false;  // the error is showRegionRefused()'s
     bool countryPickerOpen_ = false;
     int countryIndex_ = 0;  // 0 off, then kLoginCountries
-    bool settingsFromError_ = false;  // Circle goes back to the error
+    Screen settingsFrom_ = Screen::Home;  // Circle returns to where Settings opened
     std::string settingsCountry_;  // the sign-in country when Settings opened
     std::string reportUrl_, reportHeading_, reportDetail_;
     bool updatePrompt_ = false;  // the pop-up is up (on the home screen)

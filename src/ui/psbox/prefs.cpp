@@ -2,6 +2,7 @@
 // Small, account-free PSBox UI preferences. No stat() dependency (native PS4
 // stat layout differs from the OpenOrbis header on this target).
 #include "prefs.h"
+#include "../../auth/region_selection.h"
 #include <cerrno>
 #include <cstdio>
 #include <fcntl.h>
@@ -58,7 +59,7 @@ bool x4_psbox_prefs_load(const std::string& dir, X4PsboxPrefs& out) {
     ::close(fd);
     if (bytes.compare(0, 9, "X4PSBOX1\n")) return false;
     size_t pos = 9;
-    bool language = false, sort = false, profile = false, diagnostic = false;
+    bool language = false, sort = false, profile = false, diagnostic = false, region = false;
     while (pos < bytes.size()) {
         size_t end = bytes.find('\n', pos);
         if (end == std::string::npos) return false;
@@ -77,6 +78,9 @@ bool x4_psbox_prefs_load(const std::string& dir, X4PsboxPrefs& out) {
             int value = 0;
             if (diagnostic || !digit(line, "diagnostics=", 2, value)) return false;
             out.diagnostics = value != 0; diagnostic = true;
+        } else if (line.compare(0, 7, "region=") == 0) {
+            if (region || line.find('\0') != std::string::npos || !x4_region_id_valid(line.c_str() + 7)) return false;
+            out.region = line.substr(7); region = true;
         } else if (line.compare(0, 7, "hidden=") == 0) {
             std::string id = line.substr(7);
             if (!product(id) || out.hidden.size() == kMaxHidden) return false;
@@ -88,10 +92,10 @@ bool x4_psbox_prefs_load(const std::string& dir, X4PsboxPrefs& out) {
 
 bool x4_psbox_prefs_save(const std::string& dir, const X4PsboxPrefs& prefs) {
     if (!directory(dir) || prefs.language < 0 || prefs.language >= 6 ||
-        prefs.sort < 0 || prefs.sort >= 3 || prefs.stream_profile < 0 || prefs.stream_profile > 1 || prefs.hidden.size() > kMaxHidden) return false;
+        prefs.sort < 0 || prefs.sort >= 3 || prefs.stream_profile < 0 || prefs.stream_profile > 1 || prefs.hidden.size() > kMaxHidden || prefs.region.find('\0') != std::string::npos || !x4_region_id_valid(prefs.region.c_str())) return false;
     std::string bytes = "X4PSBOX1\nlanguage=" + std::to_string(prefs.language) +
         "\nsort=" + std::to_string(prefs.sort) + "\nprofile=" + std::to_string(prefs.stream_profile) +
-        "\ndiagnostics=" + (prefs.diagnostics ? "1\n" : "0\n");
+        "\ndiagnostics=" + (prefs.diagnostics ? "1\n" : "0\n") + "region=" + prefs.region + "\n";
     for (const auto& id : prefs.hidden) {
         if (!product(id) || bytes.size() + id.size() + 8 > kMaxBytes) return false;
         bytes += "hidden=" + id + "\n";

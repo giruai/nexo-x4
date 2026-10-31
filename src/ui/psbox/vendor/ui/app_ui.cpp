@@ -52,12 +52,12 @@ constexpr Color kPlaceholder = rgba(44, 44, 44);
 const char* ps4SettingsText(int item) {
     // Keep the native-only rows localized without changing upstream strings.
     static constexpr const char* labels[6][4] = {
-        {"Diagnostics", "1080p / 60 FPS (experimental)", "Video quality applies next session. 1080p is experimental.", "Catalog order"},
-        {"Diagnóstico", "1080p / 60 FPS (experimental)", "Qualidade do vídeo na próxima sessão. 1080p é experimental.", "Ordem do catálogo"},
-        {"Diagnóstico", "1080p / 60 FPS (experimental)", "La calidad se aplica en la próxima sesión. 1080p es experimental.", "Orden del catálogo"},
-        {"Diagnostic", "1080p / 60 FPS (expérimental)", "Qualité vidéo à la prochaine session. 1080p est expérimental.", "Ordre du catalogue"},
-        {"Diagnose", "1080p / 60 FPS (experimentell)", "Videoqualität ab der nächsten Sitzung. 1080p ist experimentell.", "Katalogreihenfolge"},
-        {"Diagnostica", "1080p / 60 FPS (sperimentale)", "Qualità video nella prossima sessione. 1080p è sperimentale.", "Ordine del catalogo"},
+        {"Diagnostics", "1080p / 60 FPS (experimental)", "Video quality and region apply next session. 1080p is experimental.", "Catalog order"},
+        {"Diagnóstico", "1080p / 60 FPS (experimental)", "Qualidade do vídeo e região na próxima sessão. 1080p é experimental.", "Ordem do catálogo"},
+        {"Diagnóstico", "1080p / 60 FPS (experimental)", "La calidad y la región se aplican en la próxima sesión. 1080p es experimental.", "Orden del catálogo"},
+        {"Diagnostic", "1080p / 60 FPS (expérimental)", "Qualité vidéo et région à la prochaine session. 1080p est expérimental.", "Ordre du catalogue"},
+        {"Diagnose", "1080p / 60 FPS (experimentell)", "Videoqualität und Region ab der nächsten Sitzung. 1080p ist experimentell.", "Katalogreihenfolge"},
+        {"Diagnostica", "1080p / 60 FPS (sperimentale)", "Qualità video e regione nella prossima sessione. 1080p è sperimentale.", "Ordine del catalogo"},
     };
     int lang = std::clamp(static_cast<int>(language()), 0, 5);
     return labels[lang][item];
@@ -74,13 +74,13 @@ constexpr int kResolutionOrder[3] = {1, 0, 2};
 // stream (resolution, 120 Hz, bitrate, region); sound; the controller and
 // keyboard; updates last. A group starts at each kSettingsGroupStart.
 #ifdef X4_OPENORBIS
-constexpr int kSettingsOrder[kSettingRows] = {0, 1, 9, 8, 10, 2, 11, 3, 4, 5, 6, 12, 7};
+constexpr int kSettingsOrder[kSettingRows] = {0, 1, 2, 9, 7, 8, 10, 11, 3, 4, 5, 6, 12};
 #else
 constexpr int kSettingsOrder[kSettingRows] = {0, 8, 1, 9, 10, 2, 11, 3, 4, 5, 6, 12, 7};
 #endif
 #ifdef X4_OPENORBIS
-// Only language, requested video profile and diagnostics have PS4 backends.
-constexpr int kPs4VisibleSettingsRows = 3;
+// Native settings: language, requested video profile, region, diagnostics and explicit session import.
+constexpr int kPs4VisibleSettingsRows = 5;
 #else
 constexpr int kPs4VisibleSettingsRows = kSettingRows;
 #endif
@@ -1470,6 +1470,11 @@ std::vector<std::string> AppUi::settingOptions(int row) const {
         out.push_back(withMs(trf(Str::RegionAuto, defaultRegion_.empty() ? "-" : prettyRegion(defaultRegion_)),
                              defaultRegion_));
         for (const auto& r : regions_) out.push_back(withMs(prettyRegion(r), r));
+#ifdef X4_OPENORBIS
+        // Keep an unavailable saved preference visible while the backend falls back.
+        if (!settings_.region.empty() && std::find(regions_.begin(), regions_.end(), settings_.region) == regions_.end())
+            out.push_back(prettyRegion(settings_.region));
+#endif
     }
     return out;
 }
@@ -1510,6 +1515,9 @@ int AppUi::settingSelected(int row) const {
     }
     for (size_t i = 0; i < regions_.size(); ++i)
         if (regions_[i] == settings_.region) return static_cast<int>(i) + 1;
+#ifdef X4_OPENORBIS
+    if (!settings_.region.empty()) return static_cast<int>(regions_.size()) + 1;
+#endif
     return 0;
 }
 
@@ -1544,7 +1552,10 @@ void AppUi::applySetting(int row, int index) {
     } else if (row == 8) {
         settings_.loginCountry = index == 0 ? std::string() : kLoginCountries[index - 1];
     } else {
-        settings_.region = index == 0 ? std::string() : regions_[static_cast<size_t>(index - 1)];
+        if (index == 0) settings_.region.clear();
+        else if (index > 0 && static_cast<size_t>(index) <= regions_.size())
+            settings_.region = regions_[static_cast<size_t>(index - 1)];
+        // The extra PS4 option is the saved, unavailable preference: keep it unchanged.
     }
     dirty_ = true;
 }
@@ -1681,7 +1692,7 @@ void AppUi::handleHome(const NavInput& in, UiEvent& ev) {
     if (in.options) {
         screen_ = Screen::Settings;
         settingsRow_ = 0;
-        settingsFromError_ = false;
+        settingsFrom_ = Screen::Home;
         settingsCountry_ = settings_.loginCountry;
         dropdownOpen_ = false;
         filterList_ = -1;
@@ -2299,6 +2310,18 @@ UiEvent AppUi::handle(const NavInput& in) {
         if (in.accept || in.back) countryPickerOpen_ = false, dirty_ = true;
         return ev;
     }
+#ifdef X4_OPENORBIS
+    // Session import must also be reachable before signing in.
+    if (in.options && (screen_ == Screen::Splash || screen_ == Screen::SignIn || screen_ == Screen::Error)) {
+        settingsFrom_ = screen_;
+        screen_ = Screen::Settings;
+        settingsRow_ = 0;
+        settingsCountry_ = settings_.loginCountry;
+        dropdownOpen_ = false;
+        dirty_ = true;
+        return ev;
+    }
+#endif
     switch (screen_) {
         case Screen::Home: handleHome(in, ev); break;
         case Screen::Settings:
@@ -2332,11 +2355,17 @@ UiEvent AppUi::handle(const NavInput& in) {
                 // Dead zone, trigger vibration, keyboard keys: their own screens instead of a list.
                 openTester(settingsRow_ == 3 ? Tester::Sticks : settingsRow_ == 4 ? Tester::Triggers : Tester::Keys);
             } else if (in.accept && settingsRow_ == 7) {
+#ifdef X4_OPENORBIS
+                // Import only follows the user's explicit selection of this action.
+                ev.action = Action::ImportSavedSession;
+                ev.settings = settings_;
+#else
                 // Updates: a newer version is installed (the settings saved first).
                 if (!updateAvailable_.empty() && !updateChecking_) {
                     ev.action = Action::UpdateNow;
                     ev.settings = settings_;
                 }
+#endif
             } else if (in.accept) {
                 dropdownOpen_ = true;
                 dropdownIndex_ = settingSelected(settingsRow_);
@@ -2346,7 +2375,7 @@ UiEvent AppUi::handle(const NavInput& in) {
             if (in.back || in.options) {
                 // Back where Settings was opened. A new sign-in country
                 // takes a new sign-in.
-                screen_ = settingsFromError_ ? Screen::Error : Screen::Home;
+                screen_ = settingsFrom_;
                 dirty_ = true;
                 ev.action = settings_.loginCountry != settingsCountry_ ? Action::LoginCountry : Action::SettingsChanged;
                 ev.settings = settings_;
@@ -2411,7 +2440,7 @@ UiEvent AppUi::handle(const NavInput& in) {
             } else if (regionRefused_ && in.options) {  // Settings, on the sign-in country
                 screen_ = Screen::Settings;
                 settingsRow_ = 8;
-                settingsFromError_ = true;
+                settingsFrom_ = Screen::Error;
                 settingsCountry_ = settings_.loginCountry;
                 dropdownOpen_ = false;
                 dirty_ = true;
@@ -2663,6 +2692,9 @@ void AppUi::drawSplash(Canvas& c, uint64_t nowMs) {
     drawCentered(c, fonts_.bold, tr(Str::AppName), 500, 52, kWhite);
     drawCentered(c, fonts_.regular, status_, 590, 28, kGray);
     drawSpinner(c, kW / 2.0f, 720, 26, nowMs);
+#ifdef X4_OPENORBIS
+    drawHints(c, {{kIconOptions, tr(Str::Settings)}});
+#endif
 }
 
 void AppUi::drawSignIn(Canvas& c, uint64_t nowMs) {
@@ -2713,6 +2745,9 @@ void AppUi::drawSignIn(Canvas& c, uint64_t nowMs) {
         int w = fonts_.regular.measure(tr(Str::SignInScan), 26);
         fonts_.regular.draw(c, tr(Str::SignInScan), box.x + (box.w - w) / 2, box.y + box.h + 24, 26, kGray);
     }
+#ifdef X4_OPENORBIS
+    drawHints(c, {{kIconOptions, tr(Str::Settings)}});
+#endif
 }
 
 void AppUi::drawTabs(Canvas& c) {
@@ -3535,7 +3570,15 @@ void AppUi::drawLaunching(Canvas& c, uint64_t nowMs) {
             start = end == queueInfo_.size() ? end : end + 1;
         }
     }
+#ifdef X4_OPENORBIS
+    int hintY = 894;
+    for (const auto& line : fonts_.regular.wrap(tr(Str::Ps4StreamControlsHint), 22, kW - 2 * kMargin, 3)) {
+        drawCentered(c, fonts_.regular, line, hintY, 22, kDim);
+        hintY += 30;
+    }
+#else
     drawCentered(c, fonts_.regular, tr(Str::GestureHint), 900, 22, kDim);
+#endif
     drawHints(c, {{kIconCircle, tr(Str::Cancel)}});
 }
 
@@ -3551,19 +3594,23 @@ void AppUi::drawError(Canvas& c) {
         fonts_.regular.draw(c, line, panel.x + 56, y, 26, kGray);
         y += 38;
     }
+#ifdef X4_OPENORBIS
+    if (!errorGame_.titleId.empty())
+        drawHints(c, {{kIconCross, tr(Str::TryAgain)}, {kIconCircle, tr(Str::Back)}, {kIconOptions, tr(Str::Settings)}});
+    else
+        drawHints(c, {{kIconCross, tr(Str::TryAgain)}, {kIconOptions, tr(Str::Settings)},
+                      {kIconTouchpad, tr(Str::HoldSignOut)}});
+#else
     if (!errorGame_.titleId.empty())
         drawHints(c, {{kIconCross, tr(Str::TryAgain)}, {kIconCircle, tr(Str::Back)}});
     else if (regionRefused_)
-#ifdef X4_OPENORBIS
-        drawHints(c, {{kIconCross, tr(Str::TryAgain)}, {kIconTouchpad, tr(Str::HoldSignOut)}});
-#else
         drawHints(c, {{kIconCross, tr(Str::TryAgain)}, {kIconSquare, tr(Str::TryOtherCountry)},
                       {kIconOptions, tr(Str::Settings)},
                       {kIconTouchpad, tr(Str::HoldSignOut)}});
-#endif
     else
         drawHints(c, {{kIconCross, tr(Str::TryAgain)},
                       {kIconTouchpad, tr(Str::HoldSignOut)}});
+#endif
 }
 
 void AppUi::drawSettings(Canvas& c) {
@@ -3578,6 +3625,7 @@ void AppUi::drawSettings(Canvas& c) {
     constexpr int kRowW = 1200, kRowH = 46, kGap = 5, kGroupGap = 16;
 #ifdef X4_OPENORBIS
     labels[9] = ps4SettingsText(0);
+    labels[7] = tr(Str::ImportSavedSession);
 #endif
     Rect rows[kSettingRows];  // by row id
     int y = 236;
@@ -3592,6 +3640,9 @@ void AppUi::drawSettings(Canvas& c) {
         int ty = fonts_.semibold.centeredY(r.y, r.h, 28);
         fonts_.semibold.draw(c, labels[i], r.x + 36, ty, 28, kWhite);
         if (i == 7) {
+#ifdef X4_OPENORBIS
+            drawFaceButton(c, kIconCross, r.x + r.w - 44.0f, r.y + r.h / 2.0f, 16);
+#else
             // Updates: the state; Cross updates when there is a newer version.
             std::string value = updateChecking_            ? tr(Str::UpdateChecking)
                                 : !updateAvailable_.empty() ? trf(Str::UpdateReady, updateAvailable_)
@@ -3599,6 +3650,7 @@ void AppUi::drawSettings(Canvas& c) {
             Color color = !updateAvailable_.empty() && !updateChecking_ ? rgba(120, 220, 120) : focused ? kWhite : kGray;
             int w = fonts_.regular.measure(value, 28);
             fonts_.regular.draw(c, value, r.x + r.w - 44 - w, fonts_.regular.centeredY(r.y, r.h, 28), 28, color);
+#endif
             y += kRowH + kGap;
             continue;
         }
@@ -3624,7 +3676,8 @@ void AppUi::drawSettings(Canvas& c) {
         y += kRowH + kGap;
     }
 #ifdef X4_OPENORBIS
-    for (const auto& line : fonts_.regular.wrap(ps4SettingsText(2), 24, kRowW, 2)) {
+    const char* note = settingsRow_ == 7 ? tr(Str::ImportSavedSessionNote) : ps4SettingsText(2);
+    for (const auto& line : fonts_.regular.wrap(note, 24, kRowW, 3)) {
         fonts_.regular.draw(c, line, kMargin, y + 20, 24, kDim);
         y += 34;
     }

@@ -5,6 +5,7 @@
 #include "json.h"
 #include "xbox_live.h"
 #include "session_store.h"
+#include "../core/product_identity.h"
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,7 +36,7 @@ extern void x4_xbox_work_set_text_input(X4XboxWork *, X4TextInput *);
 #define X4_AUTH_STEP_USEC 100000u
 #define X4_AUTH_DEFAULT_INTERVAL 5u
 #define X4_AUTH_TOKEN_SIZE 16384
-#define X4_AUTH_STORE_DIR "/data/xcloud4-auth"
+#define X4_AUTH_STORE_DIR NEXO_AUTH_DIR
 
 /* The only verification pages ever shown; anything else is refused. */
 static const char *const verification_uris[] = {
@@ -84,6 +85,7 @@ struct X4Auth {
     X4CatalogTitle session_title;
     int selected_stream_profile, session_stream_profile;
     char session_offering[24];
+    char selected_region[X4_REGION_ID_SIZE]; /* Main-owned; immutable while busy. */
     uint64_t token_expiry; /* monotonic usec, 0 when no token is held */
     char access_token[X4_AUTH_TOKEN_SIZE], refresh_token[X4_AUTH_TOKEN_SIZE];
     int32_t store_user; /* -1 when local PS4 user cannot be resolved */
@@ -191,11 +193,19 @@ static bool save_refresh(X4Auth *a)
 {
     a->refresh_dirty = visible_token(a->refresh_token, sizeof(a->refresh_token));
     if (!a->refresh_dirty || a->store_user < 0) return false;
-    int rc = x4_session_store_save(X4_AUTH_STORE_DIR, a->store_user, X4_AUTH_CLIENT_ID,
-        X4_AUTH_SCOPE, a->refresh_token, sizeof(a->refresh_token));
+    int rc = x4_session_store_prepare(NEXO_DATA_ROOT);
+    if (rc == X4_STORE_LOADED)
+        rc = x4_session_store_save(X4_AUTH_STORE_DIR, a->store_user, X4_AUTH_CLIENT_ID,
+            X4_AUTH_SCOPE, a->refresh_token, sizeof(a->refresh_token));
     printf("Nexo X4: acceso guardado resultado=%d\n", rc);
     if (rc == X4_STORE_LOADED) a->refresh_dirty = false;
     return !a->refresh_dirty;
+}
+
+static int clear_saved_refresh(X4Auth *a)
+{
+    int rc = x4_session_store_prepare(NEXO_DATA_ROOT);
+    return rc == X4_STORE_LOADED ? x4_session_store_clear(X4_AUTH_STORE_DIR, a->store_user) : rc;
 }
 
 /* Called with lock held. Saturation is monotonic; the snapshot cache forces
@@ -628,7 +638,7 @@ static int refresh_tokens(X4Auth *a, X4PassportWork *p, X4Http *http, int *http_
         /* This worker owns the tokens until it releases finished; main only
          * reads them after acquiring it. The catalog goes with the token. */
         if (a->store_user >= 0) {
-            int store_rc = x4_session_store_clear(X4_AUTH_STORE_DIR, a->store_user);
+            int store_rc = clear_saved_refresh(a);
             printf("Nexo X4: acceso guardado vencido, borrado=%d\n", store_rc);
         }
         wipe_tokens(a);
@@ -809,6 +819,7 @@ static int passport_provider(void *context, X4Http *http, char *out, size_t capa
 static void catalog_run(X4Auth *a)
 {
     X4XboxWork *w = a->xwork;
+    (void)x4_xbox_work_set_region(w, a->selected_region);
     if (!a->token_expiry || now() >= a->token_expiry) {
         reset_catalog(a, X4_CATALOG_ERROR, X4_AUTH_E_SIGNED_OUT, "token Microsoft caducado");
     } else {
@@ -830,6 +841,7 @@ static void catalog_run(X4Auth *a)
 static void session_run(X4Auth *a)
 {
     X4XboxWork *w = a->xwork;
+    (void)x4_xbox_work_set_region(w, a->selected_region);
     x4_xbox_work_set_stream_profile(w, a->session_stream_profile);
     x4_xbox_work_set_text_input(w, a->text_input);
     if (!a->token_expiry || now() >= a->token_expiry) {
@@ -952,7 +964,7 @@ static void expire_tokens(X4Auth *a)
         /* A late cancel can arrive after the worker saved a successful new
          * sign-in. Keep the disk state aligned with the cancelled result. */
         if (a->store_user >= 0) {
-            int store_rc = x4_session_store_clear(X4_AUTH_STORE_DIR, a->store_user);
+            int store_rc = clear_saved_refresh(a);
             printf("Nexo X4: acceso cancelado, borrado local=%d\n", store_rc);
             if (store_rc != X4_STORE_LOADED) {
                 publish(a, X4_AUTH_ERROR, X4_AUTH_E_STORE, 0,
@@ -1028,8 +1040,10 @@ X4Auth *x4_auth_create(void)
     int32_t user = -1;
     if (sceUserServiceGetInitialUser(&user) >= 0 && user >= 0) {
         a->store_user = user;
-        int loaded = x4_session_store_load(X4_AUTH_STORE_DIR, user, X4_AUTH_CLIENT_ID,
-            X4_AUTH_SCOPE, a->refresh_token, sizeof(a->refresh_token));
+        int loaded = x4_session_store_prepare(NEXO_DATA_ROOT);
+        if (loaded == X4_STORE_LOADED)
+            loaded = x4_session_store_load(X4_AUTH_STORE_DIR, user, X4_AUTH_CLIENT_ID,
+                X4_AUTH_SCOPE, a->refresh_token, sizeof(a->refresh_token));
         printf("Nexo X4: acceso guardado carga=%d\n", loaded);
         if (loaded == X4_STORE_LOADED) (void)start_restore(a);
     } else printf("Nexo X4: usuario PS4 no disponible; acceso solo en memoria\n");
@@ -1046,6 +1060,14 @@ int x4_auth_set_stream_profile(X4Auth *a, int profile)
     if (!a || !x4_stream_profile_valid(profile)) return X4_AUTH_E_ARGUMENT;
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
     a->selected_stream_profile = profile;
+    return 0;
+}
+
+int x4_auth_set_region(X4Auth *a, const char *id)
+{
+    if (!a || !x4_region_id_valid(id)) return X4_AUTH_E_ARGUMENT;
+    if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
+    copy_text(a->selected_region, sizeof(a->selected_region), id);
     return 0;
 }
 
@@ -1151,6 +1173,52 @@ int x4_auth_restore_saved_if_idle(X4Auth *a)
         return X4_AUTH_E_AUTHORIZED;
     reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
     return start_restore(a);
+}
+
+int x4_auth_import_legacy_saved(X4Auth *a)
+{
+#ifndef X4_OPENORBIS
+    (void)a;
+    return X4_AUTH_E_ARGUMENT; /* Real credential import exists only on PS4. */
+#else
+    if (!a) return X4_AUTH_E_ARGUMENT;
+    if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
+    int rc = join_worker(a);
+    if (rc) return rc;
+    expire_tokens(a);
+    if (a->token_expiry || visible_token(a->refresh_token, sizeof(a->refresh_token)))
+        return X4_AUTH_E_AUTHORIZED;
+    int32_t current_user = -1;
+    if (a->store_user < 0 || sceUserServiceGetInitialUser(&current_user) < 0 ||
+        current_user != a->store_user) return X4_AUTH_E_ARGUMENT;
+    /* Keep every in-memory token unchanged until a durable independent copy
+     * exists. No legacy credential crosses the console's process boundary. */
+    char *candidate = calloc(1, X4_AUTH_TOKEN_SIZE);
+    if (!candidate) return X4_AUTH_E_ALLOCATION;
+    rc = x4_session_store_prepare(NEXO_DATA_ROOT);
+    if (rc == X4_STORE_LOADED)
+        rc = x4_session_store_import(NEXO_LEGACY_AUTH_DIR, X4_AUTH_STORE_DIR,
+            current_user, X4_AUTH_CLIENT_ID, X4_AUTH_SCOPE, candidate, X4_AUTH_TOKEN_SIZE);
+    if (rc == X4_STORE_LOADED) {
+        memcpy(a->refresh_token, candidate, sizeof(a->refresh_token));
+        a->refresh_dirty = false;
+    }
+    x4_secure_clear(candidate, X4_AUTH_TOKEN_SIZE);
+    free(candidate);
+    if (rc != X4_STORE_LOADED) {
+        int error = rc == X4_STORE_MISSING ? X4_AUTH_E_IMPORT_MISSING :
+            rc == X4_STORE_EXISTS ? X4_AUTH_E_IMPORT_EXISTS :
+            rc == X4_STORE_INVALID ? X4_AUTH_E_IMPORT_INVALID : X4_AUTH_E_STORE;
+        const char *stage = rc == X4_STORE_MISSING ? "no hay sesion anterior para este usuario" :
+            rc == X4_STORE_EXISTS ? "ya existe una sesion guardada de Nexo" :
+            rc == X4_STORE_INVALID ? "sesion anterior no valida para este usuario" :
+            "no se pudo guardar la sesion importada";
+        publish(a, X4_AUTH_ERROR, error, 0, stage, NULL, NULL, 0);
+        return error;
+    }
+    reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
+    return start_restore(a);
+#endif
 }
 
 static bool valid_offering(const char *offering)
@@ -1414,7 +1482,7 @@ int x4_auth_forget(X4Auth *a)
     int rc = join_worker(a);
     if (rc) return rc;
     if (a->store_user >= 0) {
-        rc = x4_session_store_clear(X4_AUTH_STORE_DIR, a->store_user);
+        rc = clear_saved_refresh(a);
         if (rc != X4_STORE_LOADED) {
             printf("Nexo X4: cerrar sesion local fallo almacenamiento=%d\n", rc);
             return X4_AUTH_E_STORE;

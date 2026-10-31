@@ -32,7 +32,10 @@ enum {
     X4_AUTH_E_SESSION = -2012,    /* Xbox reported the cloud session failed */
     X4_AUTH_E_DEADLINE = -2013,   /* session not ready within its deadline */
     X4_AUTH_E_UNCONFIRMED = -2014, /* a remote session may exist; not confirmed closed */
-    X4_AUTH_E_STORE = -2015, /* local refresh-token removal failed */
+    X4_AUTH_E_STORE = -2015, /* local refresh-token I/O failed */
+    X4_AUTH_E_IMPORT_MISSING = -2016, /* no previous session for this PS4 user */
+    X4_AUTH_E_IMPORT_EXISTS = -2017, /* independent destination already exists */
+    X4_AUTH_E_IMPORT_INVALID = -2018, /* unsafe, corrupt or differently bound legacy session */
 };
 
 typedef struct X4Auth X4Auth;
@@ -77,6 +80,12 @@ X4Auth *x4_auth_create(void);
  * worker runs; the selected profile is copied into each session worker. */
 int x4_auth_set_stream_profile(X4Auth *auth, int profile);
 int x4_auth_stream_profile(const X4Auth *auth);
+/* Main only. NULL/empty means Auto; otherwise a stable service region ID.
+ * Returns BUSY while any worker runs; never accepts a URL. Unknown IDs can
+ * be restored before login and explicitly fall back to that offering's
+ * default when absent. Catalog/session snapshots expose the fresh sanitized
+ * regions list, active_id and fallback; they never expose service URLs. */
+int x4_auth_set_region(X4Auth *auth, const char *id);
 /* Main thread only, while no worker is busy. Registration persists across
  * sign-ins. A completed worker is joined before replacing the registration;
  * a join error preserves the old registration. The receiver context must
@@ -108,6 +117,13 @@ int x4_auth_start(X4Auth *auth, enum X4AuthAction action);
 /* Main thread only. Renew with an already held refresh token on the existing
  * worker. Never starts device authorization or reads a different profile. */
 int x4_auth_restore_saved_if_idle(X4Auth *auth);
+/* Explicit main-only PS4 action, after user chooses to import. Refuses BUSY,
+ * an existing in-memory account, a changed local user or any existing new
+ * saved file. Reads only this user's legacy file with the same client/scope;
+ * commits a private independent copy before starting Microsoft renewal.
+ * Legacy data remains untouched. Offline errors keep the new copy for retry;
+ * AUTHORIZED is published only after Microsoft renewal succeeds. */
+int x4_auth_import_legacy_saved(X4Auth *auth);
 /* Sets the cancel flag only; poll x4_auth_busy until it reports false. */
 void x4_auth_cancel(X4Auth *auth);
 int x4_auth_busy(X4Auth *auth);

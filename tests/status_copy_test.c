@@ -18,7 +18,7 @@ static int utf8_valid(const char *s)
 int main(void)
 {
     char out[512];
-    assert(x4_status_key_count() == 165);
+    assert(x4_status_key_count() == 169);
     assert(x4_status_key(x4_status_key_count()) == NULL);
     for (size_t i = 0; i < x4_status_key_count(); ++i) {
         const char *key = x4_status_key(i);

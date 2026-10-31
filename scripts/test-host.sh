@@ -25,17 +25,52 @@ done
 .local/tests/status_copy
 "$host_cc" "${flags[@]}" tests/public_metadata_locale_test.c -o .local/tests/public_metadata_locale
 .local/tests/public_metadata_locale
+for name in region_selection stream_controls session_store_import; do
+    extra=()
+    case "$name" in
+        region_selection) sources=(src/auth/region_selection.c src/auth/json.c) ;;
+        stream_controls) sources=(src/input/stream_controls.c) ;;
+        session_store_import) sources=(src/auth/session_store.c); extra=(-D_POSIX_C_SOURCE=200809L) ;;
+    esac
+    "$host_cc" "${flags[@]}" "${extra[@]}" "tests/${name}_test.c" "${sources[@]}" -o ".local/tests/$name"
+    ".local/tests/$name"
+done
+"$host_cc" "${flags[@]}" -c src/auth/region_selection.c -o .local/tests/region_selection.o
+"$host_cc" "${flags[@]}" -c src/auth/json.c -o .local/tests/json.o
 host_cxx=${HOST_CXX:-clang++}
 cppflags=(-O1 -g -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer)
 "$host_cxx" "${cppflags[@]}" -msse2 tests/overlay_copy_test.cpp -o .local/tests/overlay_copy
 .local/tests/overlay_copy
-"$host_cxx" "${cppflags[@]}" tests/psbox_prefs_test.cpp src/ui/psbox/prefs.cpp -o .local/tests/psbox_prefs
+"$host_cxx" "${cppflags[@]}" tests/psbox_prefs_test.cpp src/ui/psbox/prefs.cpp .local/tests/region_selection.o .local/tests/json.o -o .local/tests/psbox_prefs
 .local/tests/psbox_prefs
-"$host_cxx" "${cppflags[@]}" -DX4_OPENORBIS -Isrc/ui/psbox/vendor -isystem src/ui/psbox/vendor/extern \
-    tests/stream_menu_test.cpp src/ui/psbox/vendor/ui/stream_menu.cpp src/ui/psbox/vendor/ui/canvas.cpp \
-    src/ui/psbox/vendor/ui/font.cpp src/ui/psbox/vendor/ui/strings.cpp src/ui/psbox/vendor/ui/pad_icons.cpp \
-    -o .local/tests/stream_menu
-.local/tests/stream_menu assets/psbox/fonts
+# Reuse vendor objects across the three UI fixtures; AppUi is expensive under
+# amd64 translation and every fixture uses the same sanitizer configuration.
+ui_flags=(-msse2 -Wno-unused-parameter -Wno-unused-private-field -DX4_OPENORBIS -Isrc/ui/psbox/vendor -isystem src/ui/psbox/vendor/extern)
+ui_objects=()
+for unit in app_ui stream_menu canvas font strings pad_icons accent_color brand; do
+    object=".local/tests/ui_${unit}.o"
+    "$host_cxx" "${cppflags[@]}" "${ui_flags[@]}" -c "src/ui/psbox/vendor/ui/${unit}.cpp" -o "$object"
+    ui_objects+=("$object")
+done
+"$host_cxx" "${cppflags[@]}" "${ui_flags[@]}" -c src/ui/psbox/vendor/input/key_map.cpp -o .local/tests/ui_key_map.o
+"$host_cc" "${flags[@]}" -c src/ui/psbox/vendor/extern/qrcodegen.c -o .local/tests/qrcodegen.o
+ui_objects+=(.local/tests/ui_key_map.o .local/tests/qrcodegen.o)
+for name in stream_menu ps4_settings; do
+    fixture_objects=("${ui_objects[@]}")
+    if [[ $name == stream_menu ]]; then
+        fixture_objects=(.local/tests/ui_stream_menu.o .local/tests/ui_canvas.o .local/tests/ui_font.o .local/tests/ui_strings.o .local/tests/ui_pad_icons.o)
+    fi
+    "$host_cxx" "${cppflags[@]}" "${ui_flags[@]}" "tests/${name}_test.cpp" "${fixture_objects[@]}" -o ".local/tests/$name"
+    ".local/tests/$name" assets/psbox/fonts
+done
+for unit in game_text canvas; do
+    "$host_cc" "${flags[@]}" -Itests/host_stubs -c "src/ui/${unit}.c" -o ".local/tests/core_${unit}.o"
+done
+"$host_cc" "${flags[@]}" -c src/auth/status_copy.c -o .local/tests/status_copy.o
+"$host_cxx" "${cppflags[@]}" "${ui_flags[@]}" tests/psbox_catalog_refresh_test.cpp src/ui/psbox/prefs.cpp \
+    "${ui_objects[@]}" .local/tests/core_game_text.o .local/tests/core_canvas.o \
+    .local/tests/status_copy.o .local/tests/region_selection.o .local/tests/json.o -o .local/tests/psbox_catalog_refresh
+.local/tests/psbox_catalog_refresh assets/psbox/fonts
 "$host_cxx" "${cppflags[@]}" tests/queue_view_test.cpp -o .local/tests/queue_view
 .local/tests/queue_view
 "$host_cc" "${flags[@]}" tests/stream_sdp_bandwidth_test.c src/streaming/stream_sdp_bandwidth.c -o .local/tests/stream_sdp_bandwidth

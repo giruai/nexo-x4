@@ -1,3 +1,4 @@
+#include "product_identity.h"
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "dev_control.h"
 
@@ -9,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define X4_DEV_DIR "/data/xcloud4-dev/"
+#define X4_DEV_DIR NEXO_DEV_DIR
 #define X4_DEV_POLL_US 100000ull
 
 static bool enabled(void)

@@ -1,3 +1,4 @@
+#include "../../core/product_identity.h"
 // SPDX-License-Identifier: GPL-3.0-only
 // Public C bridge to PSBox's actual AppUi/Canvas, with XCloud4's real titles.
 #include "bridge.h"
@@ -28,7 +29,7 @@ enum BridgeText {
     BT_SQUARE_DELETE, BT_R1_SPACE, BT_R2_SEND, BT_CIRCLE_CANCEL,
     BT_UPPERCASE, BT_LOWERCASE, BT_SENDING_RESPONSE,
     BT_CLOSING_GAME, BT_CLOSING_VIDEO_ERROR, BT_WAITING_GAME_IMAGE,
-    BT_NATIVE_MEDIA_ERROR, BT_COUNT
+    BT_NATIVE_MEDIA_ERROR, BT_REGION_FALLBACK, BT_COUNT
 };
 static const char *const bridge_texts[BT_COUNT][6] = {
     {"All games", "Todos os jogos", "Todos los juegos", "Tous les jeux", "Alle Spiele", "Tutti i giochi"},
@@ -57,6 +58,7 @@ static const char *const bridge_texts[BT_COUNT][6] = {
     {"Closing game after video error", "Encerrando jogo após erro de vídeo", "Cerrando juego tras error de video", "Fermeture du jeu après erreur vidéo", "Spiel wird nach Videofehler geschlossen", "Chiusura del gioco dopo errore video"},
     {"Waiting for game video", "Aguardando vídeo do jogo", "Esperando imagen del juego", "Attente de la vidéo du jeu", "Warte auf Spielbild", "In attesa del video del gioco"},
     {"Could not prepare or close native media", "Não foi possível preparar ou fechar a mídia nativa", "No se pudieron preparar o cerrar los medios nativos", "Impossible de préparer ou fermer les médias natifs", "Native Medien konnten nicht vorbereitet oder geschlossen werden", "Impossibile preparare o chiudere i contenuti multimediali nativi"},
+    {"Selected region unavailable; using the service default", "Região selecionada indisponível; usando o padrão do serviço", "Región seleccionada no disponible; usando la predeterminada del servicio", "Région choisie indisponible ; région par défaut du service utilisée", "Gewählte Region nicht verfügbar; Dienststandard wird verwendet", "Regione scelta non disponibile; uso della predefinita del servizio"},
 };
 static const char *bridge_text(int language, BridgeText key) {
     if (language < 0 || language >= X4_STATUS_LANGUAGES) language = X4_STATUS_EN;
@@ -100,7 +102,7 @@ struct X4PsboxUi {
     unsigned initial_queue_elapsed = 0;
 
     X4PsboxUi() : images([this] { image_ready.store(true, std::memory_order_release); },
-        48u << 20, "/data/xcloud4-cache/psbox", 128u << 20),
+        48u << 20, NEXO_PSBOX_CACHE_DIR, 128u << 20),
         app(fonts, images), menu(fonts), canvas(1920, 1080) {}
 
     bool compose() {
@@ -190,6 +192,7 @@ extern "C" int x4_psbox_set_prefs_dir(X4PsboxUi* ui, const char* directory) {
     settings.language = ui->prefs.language;
     settings.resolution = ui->prefs.stream_profile ? 0 : 1;
     settings.diagnostics = ui->prefs.diagnostics;
+    settings.region = ui->prefs.region;
     ui->menu.setPlaybackOptions(ui->prefs.stream_profile, ui->prefs.diagnostics);
     ui->app.setSettings(settings);
     ui->app.setPrefs(ui->prefs.hidden, static_cast<xc::ui::LibrarySort>(ui->prefs.sort));
@@ -201,13 +204,14 @@ extern "C" int x4_psbox_set_prefs_dir(X4PsboxUi* ui, const char* directory) {
 
 extern "C" int x4_psbox_set_catalog(X4PsboxUi* ui, const X4CatalogSnapshot* catalog) {
     if (!ui || !catalog || catalog->count > X4_CATALOG_MAX) return -1;
-    ui->catalog_state = catalog->state;
     if (catalog->state == X4_CATALOG_LOADING) {
+        ui->catalog_state = catalog->state;
         ui->app.showSplash(catalog->stage[0] ? bridge_status(ui->prefs.language, catalog->stage) :
             bridge_text(ui->prefs.language, BT_LOADING_CATALOG));
         return 0;
     }
     if (catalog->state == X4_CATALOG_ERROR) {
+        ui->catalog_state = catalog->state;
         ui->app.showError(catalog->stage[0] ? bridge_status(ui->prefs.language, catalog->stage) :
             bridge_text(ui->prefs.language, BT_CATALOG_ERROR));
         return 0;
@@ -219,14 +223,33 @@ extern "C" int x4_psbox_set_catalog(X4PsboxUi* ui, const X4CatalogSnapshot* cata
             !terminated(title.product_id, sizeof(title.product_id)) ||
             !terminated(title.name, sizeof(title.name))) return -1;
     }
+    std::vector<std::string> regions;
+    if (catalog->regions.count > X4_REGION_MAX) return -1;
+    std::string default_region;
+    for (unsigned i = 0; i < catalog->regions.count; ++i) {
+        const auto& region = catalog->regions.items[i];
+        if (!terminated(region.id, sizeof(region.id)) || !x4_region_id_valid(region.id)) return -1;
+        regions.emplace_back(region.id);
+        if (region.is_default && default_region.empty()) default_region = region.id;
+    }
+    // Public names/art belong to ProductIds, not region or account revisions.
+    // The backend deduplicates unchanged catalog identities and will not replay
+    // its finished batches for a region-only refresh. Retain only products in
+    // the newly verified snapshot; compose always rebuilds titleIds and access
+    // from that snapshot and intersects the public curated lists with it.
+    std::set<std::string> verified_products;
+    for (size_t i = 0; i < catalog->count; ++i)
+        if (catalog->titles[i].product_id[0]) verified_products.insert(catalog->titles[i].product_id);
+    for (auto it = ui->metadata.begin(); it != ui->metadata.end();) {
+        if (!verified_products.count(it->first)) it = ui->metadata.erase(it);
+        else ++it;
+    }
+    ui->catalog_state = catalog->state;
     ui->titles.assign(catalog->titles, catalog->titles + catalog->count);
-    ui->metadata.clear(); // public metadata is tied to this catalog revision
-    ui->curated.clear();
-    ui->curated_visible = false;
     ui->input_since_catalog = false;
-    (void)ui->compose();
-    if (catalog->region[0]) ui->app.setRegions({catalog->region}, catalog->region);
-    ui->app.showHome();
+    ui->curated_visible = ui->compose();
+    ui->app.setRegions(regions, default_region);
+    ui->app.showHome(catalog->regions.fallback ? bridge_text(ui->prefs.language, BT_REGION_FALLBACK) : "");
     return 0;
 }
 
@@ -297,6 +320,7 @@ extern "C" void x4_psbox_set_auth(X4PsboxUi* ui, const X4AuthSnapshot* auth) {
         settings.language = ui->prefs.language;
         settings.resolution = ui->prefs.stream_profile ? 0 : 1;
         settings.diagnostics = ui->prefs.diagnostics;
+    settings.region = ui->prefs.region;
         ui->app.setSettings(settings);
         ui->app.showSplash(bridge_text(ui->prefs.language, BT_PRESS_X_SIGN_IN));
     }
@@ -369,6 +393,11 @@ extern "C" void x4_psbox_set_session(X4PsboxUi* ui, const X4SessionSnapshot* ses
             queue_details += text.lines[i];
         }
     }
+    if (session->regions.fallback &&
+        (session->state == X4_SESSION_STARTING || session->state == X4_SESSION_WAITING)) {
+        const std::string warning = bridge_text(ui->prefs.language, BT_REGION_FALLBACK);
+        queue_details = queue_details.empty() ? warning : warning + "\n" + queue_details;
+    }
     const std::string stage = session->stage[0] ? bridge_status(ui->prefs.language, session->stage) :
         bridge_text(ui->prefs.language, BT_PREPARING_SESSION);
     switch (session->state) {
@@ -415,7 +444,7 @@ extern "C" X4PsboxEvent x4_psbox_handle(X4PsboxUi* ui, const X4PsboxPad* pad) {
         ui->input_since_catalog = true;
     if ((ui->auth_state == X4_AUTH_IDLE || ui->auth_state == X4_AUTH_CANCELLED ||
          ui->auth_state == X4_AUTH_ERROR || ui->auth_state == X4_AUTH_EXPIRED) &&
-        (pad->pressed & X4_PSB_CROSS)) {
+        (pad->pressed & X4_PSB_CROSS) && !x4_psbox_settings_open(ui)) {
         out.action = X4_PSB_ACTION_SIGN_IN;
         return out;
     }
@@ -460,6 +489,7 @@ extern "C" X4PsboxEvent x4_psbox_handle(X4PsboxUi* ui, const X4PsboxPad* pad) {
     case xc::ui::Action::Retry:
         out.action = ui->auth_state == X4_AUTH_AUTHORIZED ? X4_PSB_ACTION_REFRESH_CATALOG : X4_PSB_ACTION_SIGN_IN;
         break;
+    case xc::ui::Action::ImportSavedSession: out.action = X4_PSB_ACTION_IMPORT_LEGACY; break;
     case xc::ui::Action::SignOut: out.action = X4_PSB_ACTION_SIGN_OUT; break;
     case xc::ui::Action::CancelLaunch:
         if (ui->session_terminal) {
@@ -472,10 +502,14 @@ extern "C" X4PsboxEvent x4_psbox_handle(X4PsboxUi* ui, const X4PsboxPad* pad) {
         if (event.settings.language >= 0 &&
             event.settings.language < static_cast<int>(xc::ui::Language::Count)) {
             const int old_language = ui->prefs.language;
+            const std::string old_region = ui->prefs.region;
             xc::ui::setLanguage(static_cast<xc::ui::Language>(event.settings.language));
             ui->prefs.language = event.settings.language;
             ui->prefs.stream_profile = event.settings.resolution == 0 ? 1 : 0;
             ui->prefs.diagnostics = event.settings.diagnostics;
+            if (!x4_region_id_valid(event.settings.region.c_str())) break;
+            ui->prefs.region = event.settings.region;
+            if (old_region != ui->prefs.region) out.action = X4_PSB_ACTION_REGION_CHANGED;
             ui->menu.setPlaybackOptions(ui->prefs.stream_profile, ui->prefs.diagnostics);
             if (old_language != ui->prefs.language && ui->catalog_state == X4_CATALOG_READY)
                 (void)ui->compose();
@@ -578,6 +612,7 @@ extern "C" enum X4PsboxMenuAction x4_psbox_menu_handle(X4PsboxUi* ui, const X4Ps
         settings.language = ui->prefs.language;
         settings.resolution = ui->prefs.stream_profile ? 0 : 1;
         settings.diagnostics = ui->prefs.diagnostics;
+    settings.region = ui->prefs.region;
         ui->app.setSettings(settings);
         if (!ui->prefs_dir.empty() && !x4_psbox_prefs_save(ui->prefs_dir, ui->prefs)) {
             ui->app.showHome(bridge_text(ui->prefs.language, BT_PREFS_SAVE_ERROR));
@@ -701,3 +736,5 @@ extern "C" void x4_psbox_show_closing(X4PsboxUi *ui) {
 }
 
 extern "C" int x4_psbox_settings_open(const X4PsboxUi *ui) { return ui && ui->app.screen() == xc::ui::Screen::Settings; }
+
+extern "C" const char* x4_psbox_region(const X4PsboxUi* ui) { return ui ? ui->prefs.region.c_str() : ""; }

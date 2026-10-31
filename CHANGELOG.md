@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 — stable release · PS4 APP_VER 02.02
+
+- Use independent `NEXO00001` install identity and `/data/nexo-x4/` storage. Keep the previous application and saved account intact; offer explicit current-user session import with private, complete-directory commits and renewal.
+- Send Options to the game and touchpad click as View. Swipe up for Xbox Guide, swipe down or L3+R3 for the Nexo menu; capture local menu/text input through neutral release.
+- Persist Auto or a region ID offered by Microsoft and apply it to catalog and fresh session login. Report unavailable-selection fallback without accepting arbitrary endpoints.
+- Preserve verified public names, artwork and curated rows across an identical catalog refresh while rebuilding current title IDs and access flags.
+- Add storage/race, region, controls and six-language UI/refresh regression fixtures; keep the existing media pipeline and supported profiles.
+
+Native PS4 tests verified session import/renewal/restart, region choice, received 720p/1080p, audio PCM, Options/Guide/local menu, and actual Fortnite search text entry. FPS varies by scene and incoming cadence; 1080p remains experimental. See [validation and limits](docs/VALIDATION.md). Thanks to everyone who reported these issues, and to the XCloud4 author for clarifying the Lab identity collision.
+
 ## Investigation — 2026-10-23
 
 Tested and rejected a local 0.1.11 decoder-scheduling experiment: deferring idle CPU-copy workers did not reach the 10% slow-frame target. Restored the tested 0.1.10 code and package; no experimental release was published. See [method, measurements and limits](docs/experiments/DECODE-SCHEDULING.md).

@@ -251,7 +251,12 @@ const Canvas& StreamMenu::renderMenu(const StreamInfo& info) const {
     line(Str::StatFrameRate, values[3]);
     line(Str::StatLoss, values[4]);
     line(Str::StatDecode, values[5]);
-    fonts_.regular.draw(c, tr(Str::Back), 40, kMenuH - 46, 19, kGray);
+    int hintY = 648;
+    for (const auto& hint : fonts_.regular.wrap(tr(Str::Ps4MenuControlsHint), 16, kMenuW - 80, 2)) {
+        fonts_.regular.draw(c, hint, 40, hintY, 16, kDim);
+        hintY += 20;
+    }
+    fonts_.regular.draw(c, tr(Str::Back), 40, kMenuH - 28, 19, kGray);
     return c;
 #else
     // The non-PS4 menu includes a live microphone meter; keep that layer live.

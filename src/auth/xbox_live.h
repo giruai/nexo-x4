@@ -18,8 +18,13 @@ typedef void (*X4XboxProgress)(void *context, const char *stage, const char *off
 X4XboxWork *x4_xbox_work_new(void);
 void x4_xbox_work_free(X4XboxWork *work);
 
+/* Before a run, copies an ID preference (NULL/empty=Auto). Each catalog and
+ * session login resolves it against its own offering's fresh service list.
+ * Returns ARGUMENT for invalid IDs; never accepts an endpoint. */
+int x4_xbox_work_set_region(X4XboxWork *work, const char *id);
+
 /* Microsoft token -> Xbox user token -> XSTS (gssv) -> xgpuweb or, when that
- * offering is refused, xgpuwebf2p -> default region /v2/titles -> Store names
+ * offering is refused, xgpuwebf2p -> selected region /v2/titles -> Store names
  * for the first titles. Opens and closes its own HTTPS context. Returns the
  * final READY/ERROR/CANCELLED view stored inside the workspace. */
 const X4CatalogSnapshot *x4_xbox_catalog(X4XboxWork *work, const char *microsoft_token,
@@ -42,7 +47,7 @@ typedef int (*X4XboxPassport)(void *context, X4Http *http, char *out, size_t cap
 
 /* Session preparation and connection authorization, on a fresh workspace:
  * Microsoft token -> Xbox user token -> XSTS -> credentials for exactly
- * `offering` ("xgpuweb" or "xgpuwebf2p", no fallback) -> default region POST
+ * `offering` ("xgpuweb" or "xgpuwebf2p", no fallback) -> selected region POST
  * /v5/sessions/cloud/play for title->id -> GET .../state every 2 s until
  * ReadyToConnect/Provisioned (180 s) -> passport provider -> POST
  * .../connect once -> real RTC SDP/ICE exchange -> receive authenticated

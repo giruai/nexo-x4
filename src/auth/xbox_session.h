@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
+#include "region_selection.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -74,6 +75,7 @@ typedef struct {
     unsigned state_poll_count, last_state_poll_elapsed_seconds;
     X4QueueEstimate queue_estimate;
     char stage[80], region[80], offering[24], title_name[128];
+    X4RegionSnapshot regions;
 } X4SessionSnapshot;
 
 /* Authenticated, decrypted RTP. kind 0 is H264 video, kind 1 Opus audio.

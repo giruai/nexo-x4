@@ -8,6 +8,7 @@ struct X4PsboxPrefs {
     int sort = 0;
     int stream_profile = 0; // 0=720p, 1=experimental 1080p
     bool diagnostics = false;
+    std::string region; // empty=Auto; public stable service ID only
     std::vector<std::string> hidden;
 };
 bool x4_psbox_prefs_load(const std::string& dir, X4PsboxPrefs& out);

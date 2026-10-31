@@ -1,3 +1,4 @@
+#include "product_identity.h"
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,10 +137,11 @@ int main(void)
     X4SessionSnapshot psbox_session_sent = {0};
     int psbox_auth_valid = 0, psbox_session_valid = 0;
     int psbox_catalog_requested = 0, psbox_forget_pending = 0;
+    int psbox_region_pending = 0;
     int psbox_auto_restore_paused = 0;
     int psbox_waiting_video = 0;
     uint64_t psbox_guide_until_us = 0;
-    X4StreamInputGuard psbox_menu_guard = {0};
+    X4StreamControls psbox_stream_controls = {0};
     X4AutoRestorePolicy psbox_auto_restore = {0};
     X4LiveMediaSnapshot psbox_stats_previous = {0};
     uint64_t psbox_stats_at = 0;
@@ -170,7 +172,7 @@ reopen_interface:;
 #if X4_PSBOX_UI
     psbox = x4_psbox_create("/app0/assets/psbox/fonts");
     if (psbox) {
-        if (x4_psbox_set_prefs_dir(psbox, "/data/xcloud4-ui") < 0)
+        if (x4_psbox_set_prefs_dir(psbox, NEXO_UI_DIR) < 0)
             printf("Nexo X4: preferencias PSBox no disponibles\n");
         psbox_backend = x4_psbox_backend_create();
         if (psbox_backend) (void)x4_psbox_backend_set_language(psbox_backend, x4_psbox_language(psbox));
@@ -180,7 +182,7 @@ reopen_interface:;
         psbox_auto_restore_paused = 0;
         psbox_waiting_video = 0;
         psbox_guide_until_us = 0;
-        psbox_menu_guard = (X4StreamInputGuard){0};
+        x4_stream_controls_reset(&psbox_stream_controls);
         x4_auto_restore_init(&psbox_auto_restore);
         psbox_stats_at = 0;
         psbox_stats_previous = (X4LiveMediaSnapshot){0};
@@ -312,18 +314,26 @@ reopen_interface:;
             text_pad->analogButtons.l2, text_pad->analogButtons.r2) != 0;
         bool chord = (controller.data.buttons & (ORBIS_PAD_BUTTON_L1 | ORBIS_PAD_BUTTON_R1)) ==
             (ORBIS_PAD_BUTTON_L1 | ORBIS_PAD_BUTTON_R1);
-        bool local_action = game_input && !text_capture && chord && (controller.data.buttons &
-            (ORBIS_PAD_BUTTON_OPTIONS | ORBIS_PAD_BUTTON_CIRCLE | ORBIS_PAD_BUTTON_SQUARE));
-        bool guide_action = game_input && !text_capture && chord && (controller.data.buttons & ORBIS_PAD_BUTTON_TOUCH_PAD);
-        bool diagnostic_action = game_input && !text_capture && chord &&
-            (controller.data.buttons & ORBIS_PAD_BUTTON_TRIANGLE);
         bool psbox_menu_capture = false;
+        bool active_psbox_stream = false;
 #if X4_PSBOX_UI
+        active_psbox_stream = psbox && game_input;
+        X4StreamControlsSample controls_sample;
+        x4_controller_stream_sample(&controller, (uint32_t)(input_at / 1000), &controls_sample);
+        controls_sample.streaming = active_psbox_stream;
+        controls_sample.text_capture = text_capture;
+        controls_sample.menu_open = psbox && x4_psbox_menu_open(psbox);
+        const X4StreamControlsConfig controls_config = {
+            .touchpad_button = ORBIS_PAD_BUTTON_TOUCH_PAD,
+            .menu_chord = ORBIS_PAD_BUTTON_L3 | ORBIS_PAD_BUTTON_R3
+        };
+        X4StreamControlsResult controls = x4_stream_controls_step(&psbox_stream_controls,
+            &controls_sample, &controls_config);
+        psbox_menu_capture = active_psbox_stream && controls.capture_remote;
         enum X4PsboxMenuAction psbox_menu_action = X4_PSB_MENU_NONE;
         if (psbox && game_input && !text_capture) {
             bool was_open = x4_psbox_menu_open(psbox) != 0;
-            bool toggle = live_status.video_ready && !chord &&
-                (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS);
+            bool toggle = controls.action == X4_STREAM_CONTROL_MENU;
             if (toggle) {
                 x4_psbox_menu_toggle(psbox);
                 if (was_open) x4_auth_request_keyframe(auth);
@@ -331,22 +341,31 @@ reopen_interface:;
                 X4PsboxPad pad = psbox_pad(&controller, input_at);
                 psbox_menu_action = x4_psbox_menu_handle(psbox, &pad);
             }
-            psbox_menu_capture = was_open || toggle;
+            psbox_menu_capture = psbox_menu_capture || was_open || toggle;
             if (psbox_menu_action == X4_PSB_MENU_CLOSE || psbox_menu_action == X4_PSB_MENU_GUIDE)
                 x4_auth_request_keyframe(auth);
             if (psbox_menu_action == X4_PSB_MENU_PREFS_FAILED)
                 printf("Nexo X4: no se pudieron guardar las opciones; siguen activas en memoria\n");
             if (psbox_menu_action == X4_PSB_MENU_GUIDE)
                 psbox_guide_until_us = input_at + 250000;
+            if (controls.action == X4_STREAM_CONTROL_GUIDE) {
+                psbox_guide_until_us = input_at + 250000;
+                x4_auth_request_keyframe(auth);
+            }
         }
-        if (psbox && screen.page == 6) {
-            const OrbisPadData *pad = &controller.data;
-            psbox_menu_capture = x4_stream_input_guard_step(&psbox_menu_guard,
-                psbox_menu_capture, pad->buttons, pad->leftStick.x, pad->leftStick.y,
-                pad->rightStick.x, pad->rightStick.y,
-                pad->analogButtons.l2, pad->analogButtons.r2) != 0;
-        } else psbox_menu_guard.waiting_neutral = 0;
+        if (!game_input || !controller.data.connected || text_capture)
+            psbox_guide_until_us = 0;
 #endif
+        /* Options and touchpad click keep immediate Xbox Menu/View semantics.
+         * The PSBox local menu uses swipe-down or L3+R3, never plain Options. */
+        uint32_t legacy_local_buttons = ORBIS_PAD_BUTTON_CIRCLE | ORBIS_PAD_BUTTON_SQUARE;
+        if (!active_psbox_stream) legacy_local_buttons |= ORBIS_PAD_BUTTON_OPTIONS;
+        bool local_action = game_input && !active_psbox_stream && !text_capture && !psbox_menu_capture && chord &&
+            (controller.data.buttons & legacy_local_buttons);
+        bool guide_action = game_input && !active_psbox_stream && !text_capture && !psbox_menu_capture && chord &&
+            (controller.data.buttons & ORBIS_PAD_BUTTON_TOUCH_PAD);
+        bool diagnostic_action = game_input && !active_psbox_stream && !text_capture && !psbox_menu_capture && chord &&
+            (controller.data.buttons & ORBIS_PAD_BUTTON_TRIANGLE);
         X4GamepadFrame gamepad = {0};
         if (game_input) x4_controller_gamepad(&controller, &gamepad);
         if (local_action || guide_action || diagnostic_action || psbox_menu_capture || text_capture) {
@@ -401,7 +420,8 @@ reopen_interface:;
                 ) ui_pressed &= ~ORBIS_PAD_BUTTON_OPTIONS;
             /* CIRCLE finishes legacy keyboard editing before account
              * navigation. PSBox page 6 owns plain OPTIONS, even while its
-             * session is still connecting; the exit chord remains below. */
+             * session is still connecting. The legacy exit chord only applies
+             * outside the active PSBox game; its menu owns session exit. */
             if (screen.page == 5 && catalog_browser.editing
 #if X4_PSBOX_UI
                 && !psbox
@@ -422,7 +442,7 @@ reopen_interface:;
 #endif
             if (
 #if X4_PSBOX_UI
-                x4_stream_exit_chord(psbox != NULL, screen.page, game_input,
+                !active_psbox_stream && x4_stream_exit_chord(psbox != NULL, screen.page, game_input,
                     chord, (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS) != 0)
 #else
                 game_input && chord && (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS)
@@ -507,8 +527,19 @@ reopen_interface:;
                 else if (restore_rc != X4_AUTH_E_BUSY && restore_rc != X4_AUTH_E_AUTHORIZED)
                     x4_auto_restore_delay(&psbox_auto_restore, input_at);
             }
+            /* A choice made while a catalog worker was busy is retained and
+             * applied once idle. Never alter an active game session. */
+            if (psbox_region_pending && !closing && !psbox_forget_pending &&
+                screen.page == 5 && !x4_auth_busy(auth)) {
+                if (!x4_auth_set_region(auth, x4_psbox_region(psbox))) {
+                    psbox_region_pending = 0;
+                    if (account.state == X4_AUTH_AUTHORIZED &&
+                        !x4_auth_start(auth, X4_AUTH_XBOX_CATALOG)) psbox_catalog_requested = 1;
+                }
+            }
             if (!closing && !psbox_forget_pending && account.state == X4_AUTH_AUTHORIZED &&
                 catalog.state == X4_CATALOG_IDLE && !psbox_catalog_requested && !x4_auth_busy(auth)) {
+                (void)x4_auth_set_region(auth, x4_psbox_region(psbox));
                 int catalog_rc = x4_auth_start(auth, X4_AUTH_XBOX_CATALOG);
                 if (!catalog_rc) psbox_catalog_requested = 1;
                 else printf("Nexo X4: inicio catalogo PSBox=%d\n", catalog_rc);
@@ -553,7 +584,7 @@ reopen_interface:;
                 printf("Nexo X4: reintento manual de sesion, indice=%u\n", catalog_selected);
             }
 #endif
-            if ((controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) && (!game_input || chord) &&
+            if ((controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) && (!game_input || (chord && !active_psbox_stream)) &&
                 !psbox_menu_capture) {
                 trace_inactive(live);
                 x4_auth_cancel(auth);
@@ -588,7 +619,18 @@ reopen_interface:;
                         break;
                     case X4_PSB_ACTION_REFRESH_CATALOG:
                         if (!x4_auth_busy(auth) && account.state == X4_AUTH_AUTHORIZED) {
+                            (void)x4_auth_set_region(auth, x4_psbox_region(psbox));
                             if (!x4_auth_start(auth, X4_AUTH_XBOX_CATALOG)) psbox_catalog_requested = 1;
+                        }
+                        break;
+                    case X4_PSB_ACTION_REGION_CHANGED:
+                        psbox_region_pending = 1;
+                        break;
+                    case X4_PSB_ACTION_IMPORT_LEGACY:
+                        if (!x4_auth_busy(auth)) {
+                            int import_rc = x4_auth_import_legacy_saved(auth);
+                            printf("Nexo X4: import saved session result=%d\n", import_rc);
+                            if (!import_rc) psbox_auto_restore_paused = 0;
                         }
                         break;
                     case X4_PSB_ACTION_SIGN_OUT:
@@ -722,6 +764,9 @@ reopen_interface:;
                     rc = live_error;
                     if (!rc) rc = x4_auth_set_media_callback(auth, x4_live_media_receive, live, x4_live_media_trace(live));
                     if (!rc) rc = x4_auth_set_grace_inbox(auth,x4_live_media_grace_inbox(live));
+#if X4_PSBOX_UI
+                    if (!rc && psbox) rc = x4_auth_set_region(auth, x4_psbox_region(psbox));
+#endif
                     if (!rc) { game_controls = 0; rc = x4_auth_start_session(auth, catalog_selected); }
                     if (rc && !live_error) live_error = rc;
                     x4_auth_session_snapshot(auth, &session);
@@ -793,7 +838,8 @@ reopen_interface:;
                         "Cerrando juego tras error de video");
 #endif
                 }
-                if (screen.page == 6 && (controller.pressed & ORBIS_PAD_BUTTON_SQUARE) && (!game_input || chord)) {
+                if (screen.page == 6 && !text_capture && !psbox_menu_capture &&
+                    (controller.pressed & ORBIS_PAD_BUTTON_SQUARE) && (!game_input || (chord && !active_psbox_stream))) {
                     live_muted = !live_muted;
                     x4_live_media_set_muted(live, live_muted != 0);
                 }

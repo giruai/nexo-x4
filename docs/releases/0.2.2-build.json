@@ -1,0 +1,36 @@
+{
+  "version": "0.2.2",
+  "app_version": "02.02",
+  "title_id": "NEXO00001",
+  "content_id": "IV0000-NEXO00001_00-NEXOX4APP0000000",
+  "source_id": "nexo-x4-v0.2.2-issues123",
+  "base_commit": "ce732898945239b4d97aed424bcf33594eb83ad9",
+  "pkg_sha256": "8d15bb021f1864db9a71b3a999fb3e3db19e7bd0893472d40ed04f71498eee0c",
+  "pkg_bytes": 13565952,
+  "sdk": "OpenOrbis v0.5.4",
+  "compiler_family": "Clang 18",
+  "flags": {
+    "X4_RECEIVER_NACK": 1,
+    "X4_NACK_GRACE_MS": 0,
+    "X4_RUMBLE": 0,
+    "X4_DEV_CONTROL": 0,
+    "X4_PSBOX_UI": 1
+  },
+  "dependency_lock": "dependencies.lock.json",
+  "native_verified_visible_resolutions": [
+    "1280x720",
+    "1920x1080"
+  ],
+  "saved_session_import_and_restart": true,
+  "native_input_and_fortnite_search": true,
+  "full_host_checks": true,
+  "post_test_documentation_deltas": [
+    "README.md",
+    "CHANGELOG.md",
+    "docs/VALIDATION.md",
+    "docs/releases/0.2.2-build.json"
+  ],
+  "limitations": "See docs/VALIDATION.md; profiles do not guarantee constant 60 FPS.",
+  "state_at_validation": "Unpublished development candidate",
+  "working_tree_changes": true
+}

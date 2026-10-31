@@ -2,11 +2,30 @@
 /* Initialization follows the public OpenOrbis input sample. */
 #include "controller.h"
 #include "diagnostics.h"
+#include <stddef.h>
 #include <string.h>
 #if X4_INPUT_TRACE
 #include <stdio.h>
 #endif
 #include <orbis/UserService.h>
+/* Public OpenOrbis _types/pad.h touch ABI. In particular, finger is a contact
+ * identity; it is not inferred from the touch-array index or button mask. */
+_Static_assert(sizeof(OrbisPadTouch) == 8, "OpenOrbis touch ABI");
+_Static_assert(offsetof(OrbisPadTouch, x) == 0 && offsetof(OrbisPadTouch, y) == 2 &&
+    offsetof(OrbisPadTouch, finger) == 4, "OpenOrbis touch fields");
+_Static_assert(offsetof(OrbisPadTouchData, touch) == 8, "OpenOrbis touch array");
+
+static void read_touch_geometry(X4Controller *c)
+{
+    OrbisPadInformation info = {0};
+    c->touch_resolution_x = c->touch_resolution_y = 0;
+    if (c->handle >= 0 && scePadGetControllerInformation(c->handle, &info) >= 0 &&
+        info.touchResolutionX > 1 && info.touchResolutionY > 1) {
+        c->touch_resolution_x = info.touchResolutionX;
+        c->touch_resolution_y = info.touchResolutionY;
+    }
+}
+
 static void open_controller(X4Controller *c)
 {
     int rc;
@@ -24,6 +43,7 @@ static void open_controller(X4Controller *c)
     if (rc < 0) { c->error = rc; return; }
     c->handle = rc;
     c->error = 0;
+    read_touch_geometry(c);
 }
 void x4_controller_init(X4Controller *c)
 {
@@ -47,6 +67,9 @@ void x4_controller_read(X4Controller *c, unsigned frame)
         data.leftStick.x = data.leftStick.y = 128;
         data.rightStick.x = data.rightStick.y = 128;
         data.analogButtons.l2 = data.analogButtons.r2 = 0;
+        c->touch_resolution_x = c->touch_resolution_y = 0;
+    } else if (!c->data.connected || (!c->touch_resolution_x && frame % 120 == 0)) {
+        read_touch_geometry(c);
     }
     c->pressed = data.buttons & ~c->previous;
     c->previous = data.buttons;
@@ -71,6 +94,9 @@ void x4_controller_close(X4Controller *c)
 {
     if (c->handle >= 0) scePadClose(c->handle);
     c->handle = -1;
+    c->touch_resolution_x = c->touch_resolution_y = 0;
+    c->data.connected = 0;
+    c->data.buttons = c->previous = c->pressed = 0;
 }
 
 static int16_t axis(uint8_t value)
@@ -102,4 +128,34 @@ void x4_controller_gamepad(const X4Controller *c, X4GamepadFrame *out)
     out->right_y = (int16_t)-axis(c->data.rightStick.y);
     out->left_trigger = (uint16_t)c->data.analogButtons.l2 * 257u;
     out->right_trigger = (uint16_t)c->data.analogButtons.r2 * 257u;
+}
+
+void x4_controller_stream_sample(const X4Controller *c, uint32_t now_ms,
+    X4StreamControlsSample *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->now_ms = now_ms;
+    out->analog_neutral = true;
+    if (!c || !c->data.connected || c->error) return;
+    const OrbisPadData *pad = &c->data;
+    out->connected = true;
+    out->buttons = pad->buttons;
+    out->analog_neutral = pad->analogButtons.l2 <= 8 && pad->analogButtons.r2 <= 8 &&
+        pad->leftStick.x >= 108 && pad->leftStick.x <= 148 &&
+        pad->leftStick.y >= 108 && pad->leftStick.y <= 148 &&
+        pad->rightStick.x >= 108 && pad->rightStick.x <= 148 &&
+        pad->rightStick.y >= 108 && pad->rightStick.y <= 148;
+    out->touch.count = pad->touch.fingers;
+    out->touch.valid = c->touch_resolution_x > 1 && c->touch_resolution_y > 1;
+    if (out->touch.valid && out->touch.count == 1) {
+        const OrbisPadTouch *t = &pad->touch.touch[0];
+        if (t->x >= c->touch_resolution_x || t->y >= c->touch_resolution_y) {
+            out->touch.valid = false; /* Corrupt geometry/sample cancels contact. */
+            return;
+        }
+        out->touch.id = t->finger;
+        out->touch.x = (uint16_t)((uint32_t)t->x * UINT16_MAX / (c->touch_resolution_x - 1u));
+        out->touch.y = (uint16_t)((uint32_t)t->y * UINT16_MAX / (c->touch_resolution_y - 1u));
+    }
 }

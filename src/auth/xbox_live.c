@@ -19,7 +19,6 @@
 #define X4_XBOX_XSTS_URL "https://xsts.auth.xboxlive.com/xsts/authorize"
 #define X4_XBOX_STORE_PREFIX "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds="
 #define X4_XBOX_STORE_SUFFIX "&market=MX&languages=es-MX&fieldsTemplate=Details"
-#define X4_XBOX_GSSV_SUFFIX ".gssv-play-prod.xboxlive.com"
 #define X4_XBOX_TOKEN_SIZE 16384
 #define X4_XBOX_URL_SIZE 512
 #define X4_XBOX_STORE_NAMED 32u
@@ -61,8 +60,9 @@ struct X4XboxWork {
     char user_token[X4_XBOX_TOKEN_SIZE], xsts_token[X4_XBOX_TOKEN_SIZE], gs_token[X4_XBOX_TOKEN_SIZE];
     char authorization[X4_XBOX_TOKEN_SIZE + 8];
     char url[X4_XBOX_URL_SIZE];
-    /* https://<validated default region host>, set by default_region. */
+    /* Origin selected only from this login's validated service regions. */
     char origin[X4_XBOX_URL_SIZE];
+    char preferred_region[X4_REGION_ID_SIZE];
     /* Validated ID of the remote session; private, never logged. */
     char session_id[X4_SESSION_ID_MAX + 1];
     /* Console-transfer token from the provider; private, wiped once the
@@ -232,6 +232,7 @@ static void step(X4XboxWork *w, const char *stage)
     if (w->session_progress) {
         copy_text(w->session.stage, sizeof(w->session.stage), stage);
         copy_text(w->session.region, sizeof(w->session.region), w->result.region);
+        w->session.regions = w->result.regions;
         session_publish(w);
     }
 }
@@ -354,65 +355,30 @@ static int xsts(X4XboxWork *w)
     return 0;
 }
 
-static bool region_name(const char *name)
+/* Commit only the selected endpoint after pure enumeration/validation. */
+static bool select_region(X4XboxWork *w, X4JsonSpan root)
 {
-    if (!name[0]) return false;
-    for (const char *p = name; *p; ++p) {
-        unsigned char c = (unsigned char)*p;
-        if (!alphanumeric(c) && c != ' ' && c != '-' && c != '_') return false;
-    }
+    char origin[X4_REGION_ORIGIN_SIZE];
+    X4RegionSnapshot selected;
+    if (x4_region_select(root, w->preferred_region, &selected, origin, sizeof(origin))) return false;
+    int written = snprintf(w->url, sizeof(w->url), "%s/v2/titles", origin);
+    if (written < 0 || (size_t)written >= sizeof(w->url)) return false;
+    copy_text(w->origin, sizeof(w->origin), origin);
+    w->result.regions = selected;
+    copy_text(w->result.region, sizeof(w->result.region), selected.active_id);
+    /* Validated public IDs only: no account, session IDs or service URLs. */
+    printf("Nexo X4: region selection context=%s offering=%s preferred=%s active=%s fallback=%d offered=%u truncated=%d\n",
+        w->session_progress ? "session" : "catalog", w->result.offering,
+        selected.preferred_id[0] ? selected.preferred_id : "Auto", selected.active_id,
+        selected.fallback, selected.count, selected.truncated);
     return true;
 }
 
-/* baseUri must be https://<host> with an optional final '/'. The host is
- * lowercased and must end in the GSSV suffix; the HTTP layer checks labels
- * again before any connection. */
-static bool region_url(X4XboxWork *w, const char *base, char *host, size_t capacity)
+int x4_xbox_work_set_region(X4XboxWork *w, const char *id)
 {
-    static const char scheme[] = "https://";
-    static const char suffix[] = X4_XBOX_GSSV_SUFFIX;
-    size_t s = sizeof(scheme) - 1, tail = sizeof(suffix) - 1, n = 0;
-    if (strncmp(base, scheme, s)) return false;
-    const char *h = base + s;
-    while (h[n] && h[n] != '/') ++n;
-    if (n <= tail || n >= capacity || (h[n] == '/' && h[n + 1])) return false;
-    for (size_t i = 0; i < n; ++i) {
-        char c = h[i];
-        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.')) return false;
-        host[i] = c;
-    }
-    host[n] = 0;
-    if (memcmp(host + n - tail, suffix, tail)) return false;
-    int origin = snprintf(w->origin, sizeof(w->origin), "https://%s", host);
-    int written = snprintf(w->url, sizeof(w->url), "https://%s/v2/titles", host);
-    if (origin > 0 && (size_t)origin < sizeof(w->origin) && written > 0 && (size_t)written < sizeof(w->url))
-        return true;
-    x4_secure_clear(w->origin, sizeof(w->origin));
-    return false;
-}
-
-/* First region flagged isDefault. Its name is shown when plain, else its host. */
-static bool default_region(X4XboxWork *w, X4JsonSpan root)
-{
-    X4JsonSpan settings, regions, item, v;
-    if (x4_json_member(root, "offeringSettings", &settings) != 1 ||
-        x4_json_member(settings, "regions", &regions) != 1) return false;
-    size_t cursor = 0;
-    while (x4_json_item(regions, &cursor, &item) == 1) {
-        int is_default = 0;
-        if (x4_json_member(item, "isDefault", &v) != 1 || x4_json_bool(v, &is_default) < 0 || !is_default)
-            continue;
-        char base[256], host[256], name[sizeof(w->result.region)];
-        if (x4_json_member(item, "baseUri", &v) != 1 || x4_json_token(v, base, sizeof(base)) < 0 ||
-            !region_url(w, base, host, sizeof(host)))
-            return false;
-        if (x4_json_member(item, "name", &v) == 1 && x4_json_token(v, name, sizeof(name)) == 0 && region_name(name))
-            copy_text(w->result.region, sizeof(w->result.region), name);
-        else copy_text(w->result.region, sizeof(w->result.region), host);
-        return true;
-    }
-    return false;
+    if (!w || !x4_region_id_valid(id)) return X4_AUTH_E_ARGUMENT;
+    copy_text(w->preferred_region, sizeof(w->preferred_region), id);
+    return 0;
 }
 
 /* XSTS -> cloud credentials for one offering. 0 on success, 1 when the
@@ -425,6 +391,9 @@ static int login(X4XboxWork *w, size_t index)
     w->result.error = 0;
     w->result.http_status = 0;
     w->result.region[0] = 0;
+    memset(&w->result.regions, 0, sizeof(w->result.regions));
+    copy_text(w->result.regions.preferred_id, sizeof(w->result.regions.preferred_id), w->preferred_region);
+    w->origin[0] = w->url[0] = 0;
     copy_text(w->result.offering, sizeof(w->result.offering), offerings[index].id);
     step(w, offerings[index].stage);
     if (!put(w, &used, "{\"token\":\"") || !put(w, &used, w->xsts_token) ||
@@ -447,12 +416,12 @@ static int login(X4XboxWork *w, size_t index)
     X4JsonSpan root;
     bool parsed = x4_json_parse(w->response, length, &root) == 0;
     bool token = parsed && read_token(root, "gsToken", w->gs_token, sizeof(w->gs_token));
-    bool region = token && default_region(w, root);
+    bool region = token && select_region(w, root);
     wipe_response(w, length);
     if (!token) return finish(w, X4_CATALOG_ERROR, X4_AUTH_E_RESPONSE, status, "credenciales no validas");
     if (!region) {
         x4_secure_clear(w->gs_token, sizeof(w->gs_token));
-        return finish(w, X4_CATALOG_ERROR, X4_AUTH_E_REGION, status, "region predeterminada no valida");
+        return finish(w, X4_CATALOG_ERROR, X4_AUTH_E_REGION, status, "seleccion de region no valida");
     }
     printf("Nexo X4: Xbox oferta %s lista\n", offerings[index].id);
     return 0;
@@ -2413,6 +2382,7 @@ static void session_run(X4XboxWork *w, const char *microsoft_token, const X4Cata
     x4_secure_clear(w->xsts_token, sizeof(w->xsts_token));
     if (rc) { session_auth_failed(w); return; }
     copy_text(w->session.region, sizeof(w->session.region), w->result.region);
+    w->session.regions = w->result.regions;
     int written = snprintf(w->authorization, sizeof(w->authorization), "Bearer %s", w->gs_token);
     x4_secure_clear(w->gs_token, sizeof(w->gs_token));
     if (written < 0 || (size_t)written >= sizeof(w->authorization)) {

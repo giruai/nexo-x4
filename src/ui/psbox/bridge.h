@@ -37,6 +37,7 @@ enum X4PsboxMenuAction { X4_PSB_MENU_NONE, X4_PSB_MENU_CLOSE,
 enum X4PsboxAction { X4_PSB_ACTION_NONE, X4_PSB_ACTION_SIGN_IN,
     X4_PSB_ACTION_REFRESH_CATALOG, X4_PSB_ACTION_PLAY,
     X4_PSB_ACTION_SIGN_OUT, X4_PSB_ACTION_CANCEL_SESSION,
+    X4_PSB_ACTION_REGION_CHANGED, X4_PSB_ACTION_IMPORT_LEGACY,
     X4_PSB_ACTION_UNSUPPORTED_SETTING, X4_PSB_ACTION_PREFS_SAVE_FAILED };
 typedef struct {
     enum X4PsboxAction action;
@@ -49,7 +50,7 @@ typedef struct {
 X4PsboxUi *x4_psbox_create(const char *font_dir);
 void x4_psbox_destroy(X4PsboxUi *ui);
 /* Set a dedicated absolute writable directory (for example
- * /data/xcloud4-ui) before first catalog display. No account tokens enter it. */
+ * /data/nexo-x4/ui) before first catalog display. No account tokens enter it. */
 int x4_psbox_set_prefs_dir(X4PsboxUi *ui, const char *directory);
 typedef struct {
     char product_id[32], name[128], publisher[128], description[512];
@@ -87,6 +88,7 @@ int x4_psbox_render(X4PsboxUi *ui, uint32_t *pixels, size_t pixel_count, uint64_
 /* Menu is composed over the actual decoded live frame; unsupported PS5
  * controls are absent. Caller consumes its action and neutralizes Xbox pad
  * input while the menu is open or being toggled. */
+const char *x4_psbox_region(const X4PsboxUi *ui);
 int x4_psbox_stream_profile(const X4PsboxUi *ui);
 int x4_psbox_diagnostics(const X4PsboxUi *ui);
 int x4_psbox_language(const X4PsboxUi *ui);

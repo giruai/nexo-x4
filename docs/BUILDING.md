@@ -48,7 +48,7 @@ SOURCE_ARCHIVE="$PWD/.local/downloads/Nexo-X4-v0.1.0-dependency-sources.tar.gz" 
 
 Adjust the `.local` paths if your inputs are elsewhere. `build-deps.sh` prepares the patched, pinned libraries in `X4_WEBRTC_ROOT` and installs their static outputs under `X4_WEBRTC_PREFIX`. `test-host.sh` runs portable host checks. `build.sh` compiles and packages the release with the configured SDK and runtime modules. Treat any missing required input or mismatched source revision as a build failure; do not use an older prebuilt dependency library with this release.
 
-The release configuration is diagnostic mailbox **off**, receiver NACK **on**, NACK grace **0 ms**, and rumble **off**. The package uses title ID `XCLD00001` for migration compatibility while its displayed product name is Nexo X4. Verify the generated package name and `APP_VER` before sharing it.
+The release configuration is diagnostic mailbox **off**, receiver NACK **on**, NACK grace **0 ms**, and rumble **off**. Starting with 0.2.2, the package uses independent title ID `NEXO00001` and content ID defined in `src/core/product_identity.h`. It installs alongside the older shared `XCLD00001` identity. Verify the generated package name and `APP_VER` before sharing it.
 
 ## Distribution
 

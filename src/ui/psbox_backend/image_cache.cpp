@@ -1,3 +1,4 @@
+#include "../../core/product_identity.h"
 // SPDX-License-Identifier: GPL-3.0-only
 // Adapted from PSBox image_cache.cpp, Copyright (C) 2026 RafaelNGP.
 // PS4 adapter for PSBox's ImageCache interface. Decoder/resize headers are
@@ -95,8 +96,9 @@ std::string sizedUrl(const std::string& url, int w, int h) {
         "&mode=scale&q=90&format=jpg";
 }
 void cacheDirectories(const std::string& dir) {
-    if (dir != "/data/xcloud4-cache/psbox") return;
-    (void)::mkdir("/data/xcloud4-cache", 0700);
+    if (dir != NEXO_PSBOX_CACHE_DIR) return;
+    (void)::mkdir(NEXO_DATA_ROOT, 0700);
+    (void)::mkdir(NEXO_CACHE_DIR, 0700);
     (void)::mkdir(dir.c_str(), 0700);
 }
 bool diskRead(const std::string& path, uint64_t key, std::string& bytes) {
@@ -208,7 +210,7 @@ void ImageCache::evict() {
     }
 }
 std::string ImageCache::diskPath(const std::string& url) const {
-    if (diskDir_ != "/data/xcloud4-cache/psbox") return {};
+    if (diskDir_ != NEXO_PSBOX_CACHE_DIR) return {};
     size_t slots = std::min(static_cast<size_t>(kDiskSlots), diskBudget_ / kResponseCap);
     if (!slots) return {};
     uint64_t hash = hashUrl(url);

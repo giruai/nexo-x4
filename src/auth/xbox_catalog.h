@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
 #include <stdint.h>
+#include "region_selection.h"
 
 #define X4_CATALOG_MAX 4096
 enum X4CatalogState {
@@ -19,5 +20,6 @@ typedef struct {
     unsigned count, total;
     int truncated;
     char stage[80], region[80], offering[24];
+    X4RegionSnapshot regions;
     X4CatalogTitle titles[X4_CATALOG_MAX];
 } X4CatalogSnapshot;

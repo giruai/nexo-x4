@@ -1,28 +1,36 @@
-# Validation and known limits — 0.1.10
+# Validation and known limits — 0.2.2
 
-This page covers the exact tested 0.1.10 package (`APP_VER` 01.42), with retained earlier evidence identified separately. The [performance report](PERFORMANCE-0.1.10.md) provides measurements and the [build record](releases/0.1.10-build.json) identifies original frozen inputs and the tested package hash. Release documentation was updated after testing; non-documentation inputs and the distributed executable remain unchanged.
+Release 0.2.2, PS4 APP_VER 02.02, independent title ID `NEXO00001`. The [build record](releases/0.2.2-build.json) identifies the exact tested package. The previous 0.1.10 release and its assets are unchanged. Final documentation updates do not change the executable.
 
-## Current package observations
+## Native observations
 
 | Area | Observation | Limit |
 | --- | --- | --- |
-| 1080p | Native SPS coded 1920×1088 / visible 1920×1080 | Not inferred from a screenshot or display resolution |
-| Copy stage | Median3.275→2.052 ms against0.1.9; zero extra WB copies or CPU fallback jobs in selected1080 windows | Stage-specific result; different cloud scenes prevent a causal FPS claim |
-| Gameplay | 41 five-second windows: median 59.96 freshFPS, minimum 47.65; continuous 130 s at 59.38–60.19 | No full match or universal60 FPS guarantee; queue drops occurred elsewhere |
-| 720p | Bounded decoder restart recovered level 3.2→4.2 within unchanged 1280×720 | 80 s animated-menu sample; not a 720p gameplay performance certification |
-| Account | Saved sign-in restored after in-place update and again after rollback from a later discarded experiment | Does not cover all future expiry/revocation cases |
-| Controls | Remote movement and camera responded; R2 sent without an isolated hit-damage assertion | Physical mapping confirmed earlier and retained; one controller |
-| Audio | Nonzero48 kHz PCM observed | No new physical listening, formal underrun or synchronization test |
-| Cleanup | Sessions closed successfully, input error0, service cleanup successful; normal UI presentation restored | Limited game/network/hardware coverage |
+| Installation | New identity installed separately; full installed-package hash matched; the application at the legacy identity remained unchanged | No exhaustive collision registry is claimed |
+| Saved session | Explicit import renewed and saved access; closing/reopening restored it without another device-code login; the 0.2.2 update restored it again | The old credential is read only, copied on the console, never exported; Microsoft can expire/revoke renewal credentials |
+| Regions | Auto and an explicit service-offered region applied to catalog login; fresh game-session login used the persisted selection | Availability is per current service response; no location/latency promise or custom URL entry |
+| Catalog UI | Region round trip retained public names, artwork and curated rows with no metadata replay | Current catalog IDs and access flags are rebuilt; cached artwork does not grant access |
+| Controls | Options opened Fortnite's menu; up-swipe opened/closed Xbox Guide; down-swipe and L3+R3 opened Nexo's menu; touchpad click retained View | Tests used paired Remote Play input through the native pad path; not every physical controller/firmware was exercised |
+| Keyboard | Actual Fortnite search received `ab`; X typed, Triangle changed case, Square deleted and R2 sent. Cancel preserved the existing query | Native text prompt behavior, not keyboard/mouse gameplay support |
+| Audio | Opus/AudioOut operated and Remote Play received nonzero 48 kHz PCM | No new physical listening or formal synchronization/underrun certification |
+| Cleanup | Service cleanup and input send results succeeded after profile sessions | Coverage is one game and a limited set of sessions/network conditions |
 
-Portable checks, ASan/UBSan fixtures, async ThreadSanitizer and native OpenOrbis build passed. Tests exercise ownership, fallback and uncertain-completion retention; host fixtures do not emulate PS4 GPU/cache behavior.
+Touchpad View and pickaxe animation were observed on migration candidate 0.2.1; that pad mapping is unchanged in 0.2.2. Options, gestures, menu fallback and Fortnite keyboard entry were repeated on final 0.2.2.
 
-## Retained evidence
+Both native profiles were exercised in 0.2.2: SPS confirmed 1280×720 and coded 1920×1088 / visible 1920×1080. Resolution was measured from the actual decoder stream, independently of display scanout and Remote Play capture size. Changing profile applies to a new game session and did not require another account login.
 
-Earlier Nexo tests verified Fortnite text entry through actual search results and physical controller mapping. Those paths were not changed by 0.1.10. Six-language table/format checks, stored preferences and keyboard/mapping fixtures passed. See the [0.1.9 validation at its immutable tag](https://github.com/giruai/nexo-x4/blob/v0.1.9/docs/VALIDATION.md) for the earlier package's scope. The later [decoder scheduling experiment](experiments/DECODE-SCHEDULING.md) was discarded; its code is absent from this release.
+## Cadence measurements
 
-## Remaining limits
+The media implementation is retained from 0.1.10. A migration candidate 0.2.1 with this same media/input path measured 59.39 newly drawn/presented FPS over 60.06 s of 720p Battle Royale, with no reported loss, queue-full packets or damaged-frame discards. Final0.2.2 also verified 720p; an animated Discovery/menu sample delivered 36.12 decoded pictures/s and 35.96 new frames/s with no local packet drops. These are different phases; the lower incoming cadence is not evidence of an equivalent decoder capacity limit.
 
-Native 1080p delivery is verified, but the tested settings still label it experimental. HSYNC presentation may tear. Native Decode can exceed the 60 FPS budget in demanding scenes. Received resolution, source cadence, newly presented frames and display refresh are different measurements; Remote Play dimensions do not prove native quality.
+A complete 60.02 s window in final0.2.2 at 1080p, spectating an animated Battle Royale world after a match, measured 58.77 new frames/s. It recorded 6 queue-full packet drops and 76 frame-discard events. Those events and variable native Decode cost prevent a claim of constant 60 FPS. A separate requested motion window lacked its complete log interval and is excluded from the figures.
 
-A successful bitrate request is not a server acknowledgement. Resource-wait estimates are approximate. Account access, region and service policy can change delivery; purchasing a subscription is not promised to unlock a resolution. Local multiplayer, voice chat, rumble, HDR,4K and keyboard/mouse gameplay are not offered. See [Privacy](PRIVACY.md) and [Legal](LEGAL.md).
+These sequential cloud sessions are not a controlled performance comparison. The [0.1.10 performance report](PERFORMANCE-0.1.10.md) retains the earlier copy-stage results and decoder limits. Incoming pictures, fresh presentation and screen refresh are different counters. Existing experimental HSYNC presentation may tear. Remote Play footage is functional evidence and has its own resolution/cadence.
+
+## Portable checks and storage scope
+
+The complete Linux x86-64 portable suite, AddressSanitizer/UndefinedBehaviorSanitizer fixtures and native OpenOrbis compile/link/package passed. Fixtures cover service-region validation/selection/fallback, persisted preferences, controller gestures and neutral capture, six-language rendering/text fit, identical/changed catalog refresh, and storage import/renewal/races/failures. Host tests do not emulate the PS4 GPU or native filesystem permissions; a synthetic directory-commit probe also passed on the console before legacy import.
+
+New credentials use private 0700 directories and a 0600 plaintext refresh-token file. Import refuses an existing saved session, preserves the legacy source and validates local user/client/scope. Complete nonempty session directories cannot replace each other by directory rename. POSIX can replace an empty directory created after preflight; this does not isolate a hostile writer with the same effective UID, and file fsync alone does not certify power-loss durability of directory entries. No real credential is included in tests, sources, logs intended for publication, or release assets.
+
+Full physical-controller coverage, arbitrary games/networks, universal 60 FPS, local multiplayer, voice chat, rumble, HDR, 4K and keyboard/mouse gameplay are not claimed. A successful bitrate request is not a server acknowledgement; resource-wait estimates are approximate. See [Privacy](PRIVACY.md) and [Legal](LEGAL.md). Private console configuration, account data, raw logs and captures are excluded from this repository.

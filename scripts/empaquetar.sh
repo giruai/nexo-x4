@@ -3,9 +3,12 @@
 set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 : "${OO_PS4_TOOLCHAIN:?Set OO_PS4_TOOLCHAIN; see docs/BUILDING.md}"
-TITLE='Nexo X4'
-TITLE_ID='XCLD00001'
-CONTENT_ID='IV0000-XCLD00001_00-XCLOUD4APP000000'
+# Single source shared with the executable; strict parser rejects shell input.
+readarray -t identity < <(python3 scripts/product-identity.py)
+[[ ${#identity[@]} == 3 ]] || { echo 'Invalid product identity' >&2; exit 1; }
+TITLE=${identity[0]}
+TITLE_ID=${identity[1]}
+CONTENT_ID=${identity[2]}
 VERSION=$(cat APP_VERSION)
 PACKAGE_VERSION=$(cat VERSION)
 PACKAGE_SUFFIX=${X4_PACKAGE_SUFFIX:-}

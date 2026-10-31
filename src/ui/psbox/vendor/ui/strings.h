@@ -262,6 +262,10 @@ enum class Str {
     GyroAlways,         // ... on all the time
     GyroAiming,         // ... only while L2 is held
     GyroIntensity,      // in-game menu: how far a turn moves the aim
+    ImportSavedSession, // PS4 Settings: explicit action, never automatic
+    ImportSavedSessionNote, // copies the current console user's saved Nexo session; source unchanged
+    Ps4StreamControlsHint,
+    Ps4MenuControlsHint,
     Count
 };
 

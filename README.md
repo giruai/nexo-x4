@@ -5,19 +5,20 @@
 [![Host checks](https://github.com/giruai/nexo-x4/actions/workflows/host-checks.yml/badge.svg)](https://github.com/giruai/nexo-x4/actions/workflows/host-checks.yml)
 ![PS4 homebrew](https://img.shields.io/badge/platform-PS4-003791)
 ![OpenOrbis](https://img.shields.io/badge/toolchain-OpenOrbis-334155)
-[![Release 0.1.10](https://img.shields.io/badge/release-0.1.10-2563EB)](https://github.com/giruai/nexo-x4/releases/tag/v0.1.10)
+[![Release 0.2.2](https://img.shields.io/badge/release-0.2.2-2563EB)](https://github.com/giruai/nexo-x4/releases/tag/v0.2.2)
 ![GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-3DA639)
 
 **An independent Xbox Cloud Gaming client for PS4 homebrew.** Nexo X4 combines XCloud4's native streaming foundation with a PS4 adaptation of RafaelNGP's PSBox catalog interface. It is unofficial and unaffiliated with Microsoft, Xbox, Sony or PlayStation.
 
-**Current stable release: 0.1.10.** Native 720p and 1920×1080 streaming have been verified on PS4. This release removes an extra 1080p image copy: the measured copy stage decreased from 3.28 to 2.05 ms. A sampled Fortnite gameplay interval ran near 60 fresh FPS for 130 seconds, but demanding scenes still dropped below 60. See [validation and known limits](docs/VALIDATION.md) and [release notes](docs/RELEASE-0.1.10.md).
+**Current stable release: 0.2.2.** This release adds an independent install identity, explicit saved-session migration, service-offered region selection and game-friendly Options/touchpad controls. Native 720p and 1920×1080 streaming, audio and Fortnite text entry were tested on PS4. Frame rate varies; 1080p remains experimental. See [validation and known limits](docs/VALIDATION.md) and [release notes](docs/RELEASE-0.2.2.md).
 
 [Releases and downloads](https://github.com/giruai/nexo-x4/releases) · [Build guide](docs/BUILDING.md) · [Changelog](CHANGELOG.md) · [Credits](CREDITS.md)
 
 ## What works
 
 - Microsoft device-code sign-in and locally stored sign-in renewal, so a valid saved account can be restored after restarting the application.
-- A browsable cloud catalog with public artwork, descriptions, curated rows and game launch.
+- A browsable cloud catalog with public artwork, descriptions, curated rows and game launch; region refreshes preserve verified public metadata.
+- Auto or an explicit region returned by Microsoft, saved for catalog and new game sessions.
 - One DualShock 4 controller, native H.264 video and Opus audio playback.
 - A local keyboard for supported Xbox game-text requests. Fortnite search was tested through to its results.
 - English, Brazilian Portuguese, Spanish, French, German and Italian interface text, including client statuses, queue details and keyboard controls. Public catalog text is requested in the selected locale where Xbox provides it.
@@ -41,11 +42,11 @@ Local multiplayer, microphone/voice chat, keyboard/mouse gameplay, rumble, HDR, 
 ## Install and use
 
 1. Obtain a release PKG and verify its SHA-256 against the attached checksum file. Check the version and known limits in the release notes.
-2. Install it through the normal package workflow on a PS4 that already supports homebrew execution. To update Nexo X4, install over the existing application rather than uninstalling it.
-3. Complete Microsoft sign-in using the displayed official verification address and code. Open the catalog and select a title available to your account.
-4. Use Options for language, next-session video profile and additional diagnostics. During streaming, Options opens Nexo's local menu; its Xbox button action opens the service's separate Guide.
+2. Install it through the normal package workflow on a PS4 that already supports homebrew execution. **Upgrading from 0.1.10 or earlier creates a separate app:** keep the old installation and its data until migration is verified. Updates within the new `NEXO00001` identity install over that application.
+3. For an older Nexo session, open Options → Settings → **Import saved Nexo session** before signing in. Otherwise complete Microsoft sign-in using the official displayed address and code. Open the catalog and select a title available to your account.
+4. Outside streaming, Options opens Settings for language, region, next-session video profile and diagnostics. During streaming, Options goes to the game, touchpad click is View, swipe up opens Xbox Guide, and swipe down or L3+R3 opens Nexo's menu.
 
-The latest stable package version is **0.1.10**, its PS4 `APP_VER` is **01.42**, and the title ID remains `XCLD00001` for update compatibility. Generated output is `dist/Nexo-X4-v0.1.10-ps4.pkg`. Sign-in may still be required again if Microsoft expires or revokes renewal credentials.
+The package version is **0.2.2**, PS4 `APP_VER` is **02.02**, and the independent title ID is `NEXO00001`. Generated output is `dist/Nexo-X4-v0.2.2-ps4.pkg`. Saved renewal credentials stay on the console; Microsoft expiry or revocation can still require sign-in.
 
 The local game-text keyboard uses the D-pad to choose, Cross to insert, Triangle to change case, Square to erase, R1 for space, R2 to submit and Circle to cancel. This is separate from a game's own on-screen keyboard.
 
@@ -70,3 +71,11 @@ Application code is [GPL-3.0-only](LICENSE). Incorporated components retain thei
 - [Architecture](docs/ARCHITECTURE.md)
 - [Changes by version](CHANGELOG.md)
 - [Editable brand artwork](assets/branding/README.md)
+
+### Migration from 0.1.10 and earlier
+
+The source tree now targets independent PS4 title ID `NEXO00001` (APP_VER `02.02`). This is a separate installation from versions through 0.1.10 and XCloud4 Lab, which shared `XCLD00001`. Keep the previous installation until the new app is verified. Do not uninstall or delete its data to migrate.
+
+Settings offers **Import saved Nexo session** explicitly for the current console user. Import validates the old session, preserves its original file, refuses to overwrite an existing new session, and renews with Microsoft. Expired or revoked credentials can still require sign-in. Region settings show Auto and only regions returned by Microsoft; changes apply to catalog refresh and new game sessions. A missing preferred region falls back visibly to the service default.
+
+During streaming, Options goes to the game and touchpad click remains View. Swipe up opens Xbox Guide; swipe down opens the Nexo menu. Press L3+R3 together as the menu alternative. Menu/text input is captured until controls return to neutral. These changes were tested on PS4, including saved-session migration and restart, service-offered regions, native 720p/1080p, game input and Fortnite text entry. See [validation and limits](docs/VALIDATION.md). The previous stable release and its assets remain available for reference.

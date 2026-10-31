@@ -1,3 +1,4 @@
+#include "../core/product_identity.h"
 #include "../streaming/stream_profile.h"
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_media.h"
@@ -15,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
 static unsigned be16(const uint8_t *p) { return ((unsigned)p[0] << 8) | p[1]; }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)be16(p) << 16 | be16(p + 2); }
 #ifndef X4_NACK_GRACE_MS
@@ -1707,7 +1709,9 @@ int x4_live_media_close(X4LiveMedia *m)
 #else
     const unsigned ingress_variant = 1;
 #endif
-    snprintf(path, sizeof(path), "/data/xcloud4-trace-0731-%u-%llu.bin", ingress_variant,
+    (void)mkdir(NEXO_DATA_ROOT, 0700);
+    (void)mkdir(NEXO_DIAGNOSTICS_DIR, 0700);
+    snprintf(path, sizeof(path), NEXO_DIAGNOSTICS_DIR "/trace-%u-%llu.bin", ingress_variant,
         (unsigned long long)m->trace_session);
     int dump = x4_trace_dump_file(m->trace, path);
     int progress_dump = x4_trace_monitor_dump(m->trace, path);

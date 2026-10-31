@@ -285,6 +285,10 @@ constexpr Column kEnglish = {
     "Always", // GyroAlways
     "While aiming (L2)", // GyroAiming
     "Gyro intensity", // GyroIntensity
+    "Import saved Nexo session", // ImportSavedSession
+    "Copies the saved Nexo session of the current console user. The original stays unchanged.", // ImportSavedSessionNote
+    "Options: game menu · Touchpad click: View · Swipe ↑: Xbox Guide · Swipe ↓: local menu · L3+R3: local menu", // Ps4StreamControlsHint
+    "Options: game · Touchpad: click View, ↑ Guide, ↓ local menu · L3+R3: local menu", // Ps4MenuControlsHint
 };
 
 constexpr Column kPortugueseBR = {
@@ -540,6 +544,10 @@ constexpr Column kPortugueseBR = {
     "Sempre", // GyroAlways
     "Ao mirar (L2)", // GyroAiming
     "Intensidade do giroscópio", // GyroIntensity
+    "Importar sessão salva do Nexo", // ImportSavedSession
+    "Copia a sessão salva do Nexo do usuário atual do console. A original permanece intacta.", // ImportSavedSessionNote
+    "Options: menu do jogo · Clique no touchpad: View · Deslize ↑: Guia Xbox · Deslize ↓: menu local · L3+R3: menu local", // Ps4StreamControlsHint
+    "Options: jogo · Touchpad: clique View, ↑ Guia, ↓ menu local · L3+R3: menu local", // Ps4MenuControlsHint
 };
 
 constexpr Column kSpanish = {
@@ -795,6 +803,10 @@ constexpr Column kSpanish = {
     "Siempre", // GyroAlways
     "Al apuntar (L2)", // GyroAiming
     "Intensidad del giroscopio", // GyroIntensity
+    "Importar sesión guardada de Nexo", // ImportSavedSession
+    "Copia la sesión guardada de Nexo del usuario actual de la consola. La original queda intacta.", // ImportSavedSessionNote
+    "Options: menú del juego · Clic en touchpad: View · Deslizar ↑: Guía Xbox · Deslizar ↓: menú local · L3+R3: menú local", // Ps4StreamControlsHint
+    "Options: juego · Touchpad: clic View, ↑ Guía, ↓ menú local · L3+R3: menú local", // Ps4MenuControlsHint
 };
 
 constexpr Column kFrench = {
@@ -1050,6 +1062,10 @@ constexpr Column kFrench = {
     "Toujours", // GyroAlways
     "En visant (L2)", // GyroAiming
     "Intensité du gyroscope", // GyroIntensity
+    "Importer la session Nexo enregistrée", // ImportSavedSession
+    "Copie la session Nexo enregistrée de l'utilisateur actuel de la console. L'original reste intact.", // ImportSavedSessionNote
+    "Options : menu du jeu · Clic pavé tactile : View · Glisser ↑ : Guide Xbox · Glisser ↓ : menu local · L3+R3 : menu local", // Ps4StreamControlsHint
+    "Options : jeu · Pavé tactile : clic View, ↑ Guide, ↓ menu local · L3+R3 : menu local", // Ps4MenuControlsHint
 };
 
 constexpr Column kGerman = {
@@ -1305,6 +1321,10 @@ constexpr Column kGerman = {
     "Immer", // GyroAlways
     "Beim Zielen (L2)", // GyroAiming
     "Gyro-Stärke", // GyroIntensity
+    "Gespeicherte Nexo-Sitzung importieren", // ImportSavedSession
+    "Kopiert die gespeicherte Nexo-Sitzung des aktuellen Konsolenbenutzers. Das Original bleibt unverändert.", // ImportSavedSessionNote
+    "Options: Spielmenü · Touchpad-Klick: View · Wischen ↑: Xbox-Guide · Wischen ↓: lokales Menü · L3+R3: lokales Menü", // Ps4StreamControlsHint
+    "Options: Spiel · Touchpad: Klick View, ↑ Guide, ↓ lokales Menü · L3+R3: lokales Menü", // Ps4MenuControlsHint
 };
 
 constexpr Column kItalian = {
@@ -1560,6 +1580,10 @@ constexpr Column kItalian = {
     "Sempre", // GyroAlways
     "Mirando (L2)", // GyroAiming
     "Intensità giroscopio", // GyroIntensity
+    "Importa sessione Nexo salvata", // ImportSavedSession
+    "Copia la sessione Nexo salvata dell'utente attuale della console. L'originale rimane intatto.", // ImportSavedSessionNote
+    "Options: menu del gioco · Clic sul touchpad: View · Scorri ↑: Guida Xbox · Scorri ↓: menu locale · L3+R3: menu locale", // Ps4StreamControlsHint
+    "Options: gioco · Touchpad: clic View, ↑ Guida, ↓ menu locale · L3+R3: menu locale", // Ps4MenuControlsHint
 };
 
 constexpr std::array<const Column*, kLangs> kTable = {&kEnglish, &kPortugueseBR, &kSpanish,
